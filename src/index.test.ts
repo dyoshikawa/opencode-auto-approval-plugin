@@ -79,6 +79,56 @@ describe("auto approval plugin", () => {
     expect(reply).not.toHaveBeenCalled();
   });
 
+  it("auto-approves a permission.asked event (opencode >= 1.18 event name)", async () => {
+    const { context, reply } = createContext();
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, {});
+
+    await hooks.event?.({
+      event: {
+        // Not yet in the pinned @opencode-ai/plugin event union, but emitted
+        // by opencode >= 1.18 at runtime.
+        type: "permission.asked" as unknown as "permission.updated",
+        properties: {
+          id: "permission-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "bash",
+          title: "Run bash",
+          metadata: {},
+          time: { created: 0 },
+        },
+      },
+    });
+
+    expect(review).toHaveBeenCalledOnce();
+    expect(reply).toHaveBeenCalledWith({
+      path: { id: "session-1", permissionID: "permission-1" },
+      query: { directory: "/workspace" },
+      body: { response: "once" },
+    });
+  });
+
+  it("ignores unrelated bus events", async () => {
+    const { context, reply } = createContext();
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, {});
+
+    await hooks.event?.({
+      event: {
+        type: "permission.replied",
+        properties: {
+          sessionID: "session-1",
+          permissionID: "permission-1",
+          response: "once",
+        },
+      },
+    });
+
+    expect(review).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+  });
+
   it("blocks an allow-listed tool when all-tools review escalates", async () => {
     const { context } = createContext();
     const { plugin } = createPlugin({ verdict: "escalate" });
