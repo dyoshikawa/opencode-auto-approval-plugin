@@ -69,24 +69,24 @@
     "zod": "4.5.4"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.18.25",
+    "@opencode-ai/plugin": "1.18.29",
     "@secretlint/secretlint-rule-preset-recommend": "13.0.5",
     "@tsconfig/node22": "22.0.6",
-    "@types/node": "26.4.0",
-    "@vitest/coverage-v8": "4.1.11",
-    "cspell": "10.1.1",
-    "knip": "6.33.0",
-    "lint-staged": "17.4.1",
-    "oxfmt": "0.65.0",
-    "oxlint": "1.80.0",
-    "rulesync": "16.19.0",
+    "@types/node": "26.4.1",
+    "@vitest/coverage-v8": "5.0.0",
+    "cspell": "10.2.2",
+    "knip": "6.34.0",
+    "lint-staged": "17.5.0",
+    "oxfmt": "0.66.0",
+    "oxlint": "1.81.0",
+    "rulesync": "16.24.1",
     "secretlint": "13.0.5",
     "simple-git-hooks": "2.14.0",
     "sort-package-json": "4.0.0",
-    "tsdown": "0.22.14",
+    "tsdown": "0.23.0",
     "tsx": "4.23.13",
     "typescript": "7.0.2",
-    "vitest": "4.1.11"
+    "vitest": "5.0.0"
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.18.16 <2"
