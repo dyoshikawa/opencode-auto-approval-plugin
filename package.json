@@ -66,20 +66,20 @@
     "pre-commit": "pnpm exec lint-staged"
   },
   "dependencies": {
-    "zod": "4.5.4"
+    "zod": "4.6.5"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.18.29",
+    "@opencode-ai/plugin": "1.18.30",
     "@secretlint/secretlint-rule-preset-recommend": "13.0.5",
     "@tsconfig/node22": "22.0.6",
-    "@types/node": "26.4.1",
+    "@types/node": "26.5.1",
     "@vitest/coverage-v8": "5.0.0",
-    "cspell": "10.2.2",
-    "knip": "6.34.0",
-    "lint-staged": "17.5.0",
-    "oxfmt": "0.66.0",
-    "oxlint": "1.81.0",
-    "rulesync": "16.24.1",
+    "cspell": "10.3.1",
+    "knip": "6.35.1",
+    "lint-staged": "17.5.1",
+    "oxfmt": "0.68.0",
+    "oxlint": "1.83.0",
+    "rulesync": "16.32.1",
     "secretlint": "13.0.5",
     "simple-git-hooks": "2.14.0",
     "sort-package-json": "4.0.0",
