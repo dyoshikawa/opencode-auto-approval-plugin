@@ -1,6 +1,6 @@
 {
   "name": "opencode-auto-approval-plugin",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "opencode plugin that auto-approves tool permission requests based on configurable rules",
   "keywords": [
     "opencode",
