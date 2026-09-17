@@ -14,7 +14,7 @@ function createContext(input: { options?: Record<string, unknown> } = {}) {
     create: vi.fn(async () => ({ id: "review-session" })),
     prompt: vi.fn(async () => ({ id: "inbox-1" })),
     wait: vi.fn(async () => undefined),
-    context: vi.fn(async () => [
+    context: vi.fn(async (): Promise<Record<string, unknown>[]> => [
       { type: "user", text: "hello" },
       {
         type: "assistant",
@@ -153,6 +153,36 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(allowed.effect).toBe("allow");
   });
 
+  it("skips evaluations raised under the reviewer agent and keeps its prompts out of intents", async () => {
+    const { context, hooks } = createContext();
+    const { plugin, review, isReviewerSession } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    await hooks["session.prompt"]?.({ sessionID: "review-session", prompt: { text: "review" } });
+    await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "user ask" } });
+
+    await hooks["permission.evaluate"]?.(
+      askEvent({ sessionID: "orphan", agent: "auto-approval-reviewer" }),
+    );
+    expect(review).not.toHaveBeenCalled();
+
+    await hooks["permission.evaluate"]?.(askEvent());
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ userIntent: "user ask" }));
+    expect(isReviewerSession).toHaveBeenCalledWith({ sessionID: "review-session" });
+  });
+
+  it("reviews without a model when the session lookup fails", async () => {
+    const { context, hooks, session } = createContext();
+    session.get.mockRejectedValueOnce(new Error("gone"));
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+
+    const event = askEvent();
+    await hooks["permission.evaluate"]?.(event);
+
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
+    expect(event.effect).toBe("allow");
+  });
+
   it("never turns a deny verdict into allow", async () => {
     const { context, hooks } = createContext();
     const { plugin } = createPlugin({ verdict: "deny" });
@@ -234,6 +264,13 @@ describe("V2 session client", () => {
     expect(session.create).toHaveBeenCalledWith({
       title: "Auto-approval review",
       agent: "auto-approval-reviewer",
+      permissions: [
+        { action: "*", resource: "*", effect: "deny" },
+        { action: "read", resource: "*", effect: "allow" },
+        { action: "glob", resource: "*", effect: "allow" },
+        { action: "grep", resource: "*", effect: "allow" },
+        { action: "lsp", resource: "*", effect: "allow" },
+      ],
       model: { providerID: "openai", id: "gpt-5.6" },
     });
     expect(session.prompt).toHaveBeenCalledWith({
@@ -253,7 +290,40 @@ describe("V2 session client", () => {
     expect(session.create).toHaveBeenCalledWith({
       title: "Auto-approval review",
       agent: "auto-approval-reviewer",
+      permissions: [
+        { action: "*", resource: "*", effect: "deny" },
+        { action: "read", resource: "*", effect: "allow" },
+        { action: "glob", resource: "*", effect: "allow" },
+        { action: "grep", resource: "*", effect: "allow" },
+        { action: "lsp", resource: "*", effect: "allow" },
+      ],
     });
+  });
+
+  it("returns only the final assistant reply", async () => {
+    const { context, session } = createContext();
+    session.context.mockResolvedValueOnce([
+      { type: "assistant", content: [{ type: "text", text: "Let me read {the file} first." }] },
+      { type: "user", text: "tool result" },
+      { type: "assistant", content: [{ type: "text", text: '{"verdict":"deny","reason":"no"}' }] },
+    ]);
+    const client = createV2SessionClient(context as never);
+
+    await expect(client.prompt({ sessionID: "review-session", text: "" })).resolves.toBe(
+      '{"verdict":"deny","reason":"no"}',
+    );
+  });
+
+  it("surfaces a failed assistant turn instead of an empty reply", async () => {
+    const { context, session } = createContext();
+    session.context.mockResolvedValueOnce([
+      { type: "assistant", content: [], error: { name: "ProviderError", message: "no model" } },
+    ]);
+    const client = createV2SessionClient(context as never);
+
+    await expect(client.prompt({ sessionID: "review-session", text: "" })).rejects.toThrow(
+      "Reviewer session failed: no model",
+    );
   });
 
   it("interrupts the session on abort", async () => {

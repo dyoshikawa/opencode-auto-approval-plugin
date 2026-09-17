@@ -10,7 +10,7 @@ import {
   reviewerAllowedTools,
 } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
-import { errorMessage, isRecord, textFromParts } from "./shared.js";
+import { isRecord, reviewForApproval, reviewToolCallOrThrow, textFromParts } from "./shared.js";
 
 /**
  * V1 plugin API (opencode 1.x, `@opencode-ai/plugin`): a `server()` entrypoint
@@ -54,12 +54,18 @@ export function createV1SessionClient(input: {
   directory: string;
 }): ReviewSessionClient {
   const query = { directory: input.directory };
+  // The V1 SDK picks the model per prompt, so remember the session's choice.
+  const models = new Map<string, ModelReference>();
   return {
-    create: async () => {
+    create: async ({ model }) => {
       const session = await input.client.session.create({ query });
-      return { sessionID: sessionIdentifier(session) };
+      const sessionID = sessionIdentifier(session);
+      if (model) models.set(sessionID, model);
+      return { sessionID };
     },
-    prompt: async ({ sessionID, model, text }) => {
+    prompt: async ({ sessionID, text }) => {
+      const model = models.get(sessionID);
+      models.delete(sessionID);
       const response = await input.client.session.prompt({
         path: { id: sessionID },
         query,
@@ -72,8 +78,10 @@ export function createV1SessionClient(input: {
       });
       return responseText(response);
     },
-    abort: ({ sessionID }) =>
-      input.client.session.abort?.({ path: { id: sessionID }, query }) ?? Promise.resolve(),
+    abort: ({ sessionID }) => {
+      models.delete(sessionID);
+      return input.client.session.abort?.({ path: { id: sessionID }, query }) ?? Promise.resolve();
+    },
   };
 }
 
@@ -117,6 +125,8 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         config.agent[reviewerAgentName] = reviewerAgentConfig();
       },
       "chat.message": (event, output) => {
+        // The reviewer's own prompts carry no user intent worth keeping.
+        if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return Promise.resolve();
         if (event.model) models.set(event.sessionID, event.model);
         intents.set(event.sessionID, textFromParts(output.parts));
         return Promise.resolve();
@@ -134,16 +144,20 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         const request = event.properties as PermissionRequest;
         if (reviewer.isReviewerSession({ sessionID: request.sessionID })) return;
 
-        try {
-          const decision = await reviewer.review({
+        const decision = await reviewForApproval({
+          reviewer,
+          request: {
             source: "permission-request",
             sessionID: request.sessionID,
             action: request.type,
             resource: { pattern: request.pattern, metadata: request.metadata },
             userIntent: intents.get(request.sessionID),
             model: models.get(request.sessionID),
-          });
-          if (decision.verdict !== "allow") return;
+          },
+        });
+        if (decision === undefined) return;
+
+        try {
           await context.client.postSessionIdPermissionsPermissionId({
             path: { id: request.sessionID, permissionID: request.id },
             query: { directory: context.directory },
@@ -160,26 +174,17 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         )
           return;
 
-        let decision;
-        try {
-          decision = await reviewer.review({
+        await reviewToolCallOrThrow({
+          reviewer,
+          request: {
             source: "tool-call",
             sessionID: event.sessionID,
             action: event.tool,
             resource: output.args,
             userIntent: intents.get(event.sessionID),
             model: models.get(event.sessionID),
-          });
-        } catch (error) {
-          throw new Error(
-            `Auto-approval reviewer failed; human review is required. ${errorMessage(error)}`,
-            { cause: error },
-          );
-        }
-
-        if (decision.verdict === "allow") return;
-        const outcome = decision.verdict === "deny" ? "denied" : "requires human review";
-        throw new Error(`Auto-approval reviewer ${outcome}: ${decision.reason}`);
+          },
+        });
       },
     };
   };

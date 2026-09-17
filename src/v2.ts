@@ -10,7 +10,7 @@ import {
   reviewerAllowedTools,
 } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
-import { errorMessage } from "./shared.js";
+import { reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
 
 /**
  * V2 plugin API (opencode 2.x, `@opencode/plugin`): a `setup(context)` entrypoint
@@ -34,12 +34,25 @@ function fromModelRef(
   return model ? { providerID: model.providerID, modelID: model.id } : undefined;
 }
 
+/** Everything denied except the read-only tools; last matching rule wins. */
+const reviewerPermissions = [
+  { action: "*", resource: "*", effect: "deny" as const },
+  ...reviewerAllowedTools.map((tool) => ({
+    action: tool,
+    resource: "*",
+    effect: "allow" as const,
+  })),
+];
+
 export function createV2SessionClient(context: Context): ReviewSessionClient {
   return {
     create: async ({ model }) => {
       const session = await context.session.create({
         title: "Auto-approval review",
         agent: reviewerAgentName,
+        // Repeated on the session so the agent staying read-only does not
+        // depend on nothing else redefining it.
+        permissions: reviewerPermissions,
         ...(model ? { model: toModelRef(model) } : {}),
       });
       return { sessionID: session.id };
@@ -48,9 +61,13 @@ export function createV2SessionClient(context: Context): ReviewSessionClient {
       await context.session.prompt({ sessionID, text });
       await context.session.wait({ sessionID });
       const messages = await context.session.context({ sessionID });
-      return messages
-        .flatMap((message) => (message.type === "assistant" ? [message] : []))
-        .flatMap((message) => message.content)
+      // Only the final reply is the verdict; earlier turns may have explained
+      // a tool call and would confuse the JSON extraction.
+      const reply = messages.findLast((message) => message.type === "assistant");
+      if (reply?.error) {
+        throw new Error(`Reviewer session failed: ${reply.error.message}`);
+      }
+      return (reply?.content ?? [])
         .flatMap((part) => (part.type === "text" ? [part.text] : []))
         .join("\n");
     },
@@ -78,18 +95,19 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
           agent.system = reviewerAgentPrompt;
           agent.mode = "subagent";
           agent.hidden = true;
-          agent.permissions = [
-            { action: "*", resource: "*", effect: "deny" },
-            ...reviewerAllowedTools.map((tool) => ({
-              action: tool,
-              resource: "*",
-              effect: "allow" as const,
-            })),
-          ];
+          agent.permissions = [...reviewerPermissions];
         });
       });
 
+      // Both the session ID and the agent name identify the reviewer: the ID
+      // is forgotten the moment a review ends, while an interrupted reviewer
+      // session may still be winding down under its agent.
+      const isReviewer = (event: { sessionID: string; agent?: string }): boolean =>
+        event.agent === reviewerAgentName ||
+        reviewer.isReviewerSession({ sessionID: event.sessionID });
+
       await context.session.hook("prompt", (event) => {
+        if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
         intents.set(event.sessionID, event.prompt.text);
       });
 
@@ -104,51 +122,40 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
 
       if (configuration.mode === "on-ask") {
         await context.permission.hook("evaluate", async (event) => {
-          if (event.effect !== "ask") return;
-          if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
+          if (event.effect !== "ask" || isReviewer(event)) return;
 
-          try {
-            const decision = await reviewer.review({
+          const decision = await reviewForApproval({
+            reviewer,
+            request: {
               source: "permission-request",
               sessionID: event.sessionID,
               action: event.action,
               resource: { resources: event.resources, metadata: event.metadata },
               userIntent: intents.get(event.sessionID),
               model: await sessionModel(event.sessionID),
-            });
-            if (decision.verdict !== "allow") return;
-            event.effect = "allow";
-            event.message = decision.reason;
-          } catch {
-            // Fail closed: leave the request for the human permission prompt.
-          }
+            },
+          });
+          if (decision === undefined) return;
+          event.effect = "allow";
+          event.message = decision.reason;
         });
         return;
       }
 
       await context.tool.hook("execute.before", async (event) => {
-        if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
+        if (isReviewer(event)) return;
 
-        let decision;
-        try {
-          decision = await reviewer.review({
+        await reviewToolCallOrThrow({
+          reviewer,
+          request: {
             source: "tool-call",
             sessionID: event.sessionID,
             action: event.tool,
             resource: event.input,
             userIntent: intents.get(event.sessionID),
             model: await sessionModel(event.sessionID),
-          });
-        } catch (error) {
-          throw new Error(
-            `Auto-approval reviewer failed; human review is required. ${errorMessage(error)}`,
-            { cause: error },
-          );
-        }
-
-        if (decision.verdict === "allow") return;
-        const outcome = decision.verdict === "deny" ? "denied" : "requires human review";
-        throw new Error(`Auto-approval reviewer ${outcome}: ${decision.reason}`);
+          },
+        });
       });
     },
   };

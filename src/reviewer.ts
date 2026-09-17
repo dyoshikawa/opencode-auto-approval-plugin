@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { ModelReference, PluginConfiguration } from "./config.js";
+import { isRecord } from "./shared.js";
 
 type ReviewSource = "permission-request" | "tool-call";
 
@@ -24,10 +25,14 @@ export type ReviewVerdict = {
  * stays independent of how a session is created and prompted.
  */
 export type ReviewSessionClient = {
-  /** Creates an isolated reviewer session and returns its ID. */
+  /**
+   * Creates an isolated reviewer session and returns its ID. `model` is the
+   * one the whole session must use; a transport that can only choose a model
+   * per prompt remembers it here.
+   */
   create(input: { model?: ModelReference }): Promise<{ sessionID: string }>;
-  /** Sends the review prompt and resolves with the reviewer's reply text. */
-  prompt(input: { sessionID: string; model?: ModelReference; text: string }): Promise<string>;
+  /** Sends the review prompt and resolves with the reviewer's final reply text. */
+  prompt(input: { sessionID: string; text: string }): Promise<string>;
   /** Best-effort cancellation after a timeout or failure. */
   abort(input: { sessionID: string }): Promise<unknown>;
 };
@@ -41,6 +46,9 @@ export const reviewerAgentPrompt =
 
 /** The only tools the reviewer may call; everything else is denied. */
 export const reviewerAllowedTools = ["read", "glob", "grep", "lsp"] as const;
+
+/** The reason is model output shown to the user; keep it to one readable line. */
+const MAX_REASON_LENGTH = 300;
 
 export class Reviewer {
   readonly #client: ReviewSessionClient;
@@ -57,13 +65,14 @@ export class Reviewer {
   }
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const model = this.#configuration.reviewer.model ?? input.model;
-    const { sessionID } = await this.#client.create({ model });
+    const { sessionID } = await this.#client.create({
+      model: this.#configuration.reviewer.model ?? input.model,
+    });
     this.#reviewerSessionIDs.add(sessionID);
 
     try {
       const response = await withTimeout({
-        operation: this.#client.prompt({ sessionID, model, text: reviewerPrompt(input) }),
+        operation: this.#client.prompt({ sessionID, text: reviewerPrompt(input) }),
         timeoutMs: this.#configuration.reviewer.timeoutMs,
       });
       return parseVerdict(response);
@@ -110,15 +119,11 @@ function parseVerdict(input: string): ReviewVerdict {
   if (!isRecord(parsed) || !isVerdict(parsed.verdict) || typeof parsed.reason !== "string") {
     throw new Error("Reviewer response did not match the verdict schema.");
   }
-  return { verdict: parsed.verdict, reason: parsed.reason };
+  return { verdict: parsed.verdict, reason: parsed.reason.slice(0, MAX_REASON_LENGTH) };
 }
 
 function isVerdict(input: unknown): input is ReviewVerdict["verdict"] {
   return input === "allow" || input === "deny" || input === "escalate";
-}
-
-function isRecord(input: unknown): input is Record<string, unknown> {
-  return typeof input === "object" && input !== null;
 }
 
 async function withTimeout<T>(input: { operation: Promise<T>; timeoutMs: number }): Promise<T> {

@@ -189,12 +189,8 @@ describe("V1 session client", () => {
     });
     const client = createV1SessionClient({ client: sdk, directory: "/workspace" });
 
-    const created = await client.create({});
-    const text = await client.prompt({
-      sessionID: created.sessionID,
-      model: { providerID: "openai", modelID: "gpt-5.6" },
-      text: "review this",
-    });
+    const created = await client.create({ model: { providerID: "openai", modelID: "gpt-5.6" } });
+    const text = await client.prompt({ sessionID: created.sessionID, text: "review this" });
 
     expect(created).toEqual({ sessionID: "review-session" });
     expect(sdk.session.prompt).toHaveBeenCalledWith({

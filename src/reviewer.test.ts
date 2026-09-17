@@ -4,16 +4,24 @@ import { parsePluginConfiguration } from "./config.js";
 import { Reviewer, type ReviewSessionClient } from "./reviewer.js";
 
 type ReviewPrompt = Parameters<ReviewSessionClient["prompt"]>[0];
+type ReviewSessionOptions = Parameters<ReviewSessionClient["create"]>[0];
 
-function clientWithResponse(input: {
-  response: string;
-}): ReviewSessionClient & { prompts: ReviewPrompt[]; aborted: string[] } {
+function clientWithResponse(input: { response: string }): ReviewSessionClient & {
+  sessions: ReviewSessionOptions[];
+  prompts: ReviewPrompt[];
+  aborted: string[];
+} {
+  const sessions: ReviewSessionOptions[] = [];
   const prompts: ReviewPrompt[] = [];
   const aborted: string[] = [];
   return {
+    sessions,
     prompts,
     aborted,
-    create: async () => ({ sessionID: "review-session" }),
+    create: async (options) => {
+      sessions.push(options);
+      return { sessionID: "review-session" };
+    },
     prompt: async (request) => {
       prompts.push(request);
       return input.response;
@@ -42,12 +50,8 @@ describe("Reviewer", () => {
       }),
     ).resolves.toEqual({ verdict: "allow", reason: "read-only" });
 
-    expect(client.prompts).toEqual([
-      expect.objectContaining({
-        sessionID: "review-session",
-        model: { providerID: "openai", modelID: "gpt-5.6-luna" },
-      }),
-    ]);
+    expect(client.sessions).toEqual([{ model: { providerID: "openai", modelID: "gpt-5.6-luna" } }]);
+    expect(client.prompts).toEqual([expect.objectContaining({ sessionID: "review-session" })]);
   });
 
   it("uses a configured reviewer model in preference to the main session model", async () => {
@@ -67,10 +71,8 @@ describe("Reviewer", () => {
       model: { providerID: "openai", modelID: "gpt-5.6" },
     });
 
-    expect(client.prompts).toEqual([
-      expect.objectContaining({
-        model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
-      }),
+    expect(client.sessions).toEqual([
+      { model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" } },
     ]);
   });
 
@@ -134,5 +136,21 @@ describe("Reviewer", () => {
       reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} }),
     ).rejects.toThrow("Reviewer response did not contain JSON.");
     expect(client.aborted).toEqual(["review-session"]);
+  });
+
+  it("caps the reason it passes on to the user", async () => {
+    const reason = "x".repeat(1000);
+    const client = clientWithResponse({ response: `{"verdict":"deny","reason":"${reason}"}` });
+    const reviewer = new Reviewer({ client, configuration: parsePluginConfiguration({}) });
+
+    const decision = await reviewer.review({
+      source: "tool-call",
+      sessionID: "main",
+      action: "bash",
+      resource: {},
+    });
+
+    expect(decision.verdict).toBe("deny");
+    expect(decision.reason).toHaveLength(300);
   });
 });

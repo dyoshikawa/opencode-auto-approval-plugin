@@ -42,9 +42,9 @@ OpenCode 1.x:
 }
 ```
 
-For local development, build the package and add the generated `dist/index.js` to
-`.opencode/plugins/`, or link the package through an npm workspace. OpenCode also loads TypeScript
-files placed directly in `.opencode/plugins/`.
+For local development, build the package and place it under `.opencode/plugins/` (2.x) or
+`.opencode/plugin/` (1.x), or link the package through an npm workspace. OpenCode also loads
+TypeScript files placed directly in those directories.
 
 ## Configuration
 
