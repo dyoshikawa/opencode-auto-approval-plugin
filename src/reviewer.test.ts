@@ -138,8 +138,8 @@ describe("Reviewer", () => {
     expect(client.aborted).toEqual(["review-session"]);
   });
 
-  it("caps the reason it passes on to the user", async () => {
-    const reason = "x".repeat(1000);
+  it("flattens and caps the reason it passes on to the user", async () => {
+    const reason = "x".repeat(1000) + "\\u001b[31m\\nmore";
     const client = clientWithResponse({ response: `{"verdict":"deny","reason":"${reason}"}` });
     const reviewer = new Reviewer({ client, configuration: parsePluginConfiguration({}) });
 
@@ -151,6 +151,6 @@ describe("Reviewer", () => {
     });
 
     expect(decision.verdict).toBe("deny");
-    expect(decision.reason).toHaveLength(300);
+    expect(decision.reason).toBe("x".repeat(300));
   });
 });

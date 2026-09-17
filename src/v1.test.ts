@@ -19,7 +19,7 @@ function createContext() {
 
 function createPlugin(input: { verdict: ReviewerVerdict }) {
   const review = vi.fn(async () => ({ verdict: input.verdict, reason: "reviewed" }));
-  const isReviewerSession = vi.fn(() => false);
+  const isReviewerSession = vi.fn((_input: { sessionID: string }) => false);
   const plugin = createV1Plugin({
     createReviewer: () => ({ review, isReviewerSession }) as never,
   });
@@ -69,6 +69,53 @@ describe("V1 plugin (opencode 1.x)", () => {
       query: { directory: "/workspace" },
       body: { response: "once" },
     });
+  });
+
+  it("passes the tracked user intent and model along, ignoring reviewer chatter", async () => {
+    const { context } = createContext();
+    const { plugin, review, isReviewerSession } = createPlugin({ verdict: "allow" });
+    isReviewerSession.mockImplementation(
+      (input: { sessionID: string }) => input.sessionID === "review-session",
+    );
+    const hooks = await plugin(context as never, {});
+
+    await hooks["chat.message"]?.(
+      {
+        sessionID: "session-1",
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-5.6" },
+      } as never,
+      { message: {} as never, parts: [{ type: "text", text: "push my branch" }] as never },
+    );
+    await hooks["chat.message"]?.(
+      { sessionID: "review-session", agent: "auto-approval-reviewer" } as never,
+      { message: {} as never, parts: [{ type: "text", text: "review prompt" }] as never },
+    );
+    await hooks["chat.params"]?.(
+      { sessionID: "review-session", model: { providerID: "x", id: "y" } } as never,
+      {} as never,
+    );
+    await hooks.event?.({
+      event: {
+        type: "permission.asked" as unknown as "permission.updated",
+        properties: {
+          id: "permission-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "bash",
+          title: "Run bash",
+          metadata: {},
+          time: { created: 0 },
+        },
+      },
+    });
+
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userIntent: "push my branch",
+        model: { providerID: "openai", modelID: "gpt-5.6" },
+      }),
+    );
   });
 
   it("leaves an ask request for a human when the reviewer escalates", async () => {

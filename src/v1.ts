@@ -132,6 +132,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         return Promise.resolve();
       },
       "chat.params": (event) => {
+        if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return Promise.resolve();
         models.set(event.sessionID, {
           providerID: event.model.providerID,
           modelID: event.model.id,

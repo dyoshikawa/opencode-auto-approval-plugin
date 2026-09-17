@@ -47,7 +47,7 @@ export const reviewerAgentPrompt =
 /** The only tools the reviewer may call; everything else is denied. */
 export const reviewerAllowedTools = ["read", "glob", "grep", "lsp"] as const;
 
-/** The reason is model output shown to the user; keep it to one readable line. */
+/** The reason is model output shown to the user: one line, no control characters, capped. */
 const MAX_REASON_LENGTH = 300;
 
 export class Reviewer {
@@ -119,7 +119,11 @@ function parseVerdict(input: string): ReviewVerdict {
   if (!isRecord(parsed) || !isVerdict(parsed.verdict) || typeof parsed.reason !== "string") {
     throw new Error("Reviewer response did not match the verdict schema.");
   }
-  return { verdict: parsed.verdict, reason: parsed.reason.slice(0, MAX_REASON_LENGTH) };
+  const reason = parsed.reason
+    .replace(/[\s\p{Cc}\p{Cf}]+/gu, " ")
+    .trim()
+    .slice(0, MAX_REASON_LENGTH);
+  return { verdict: parsed.verdict, reason };
 }
 
 function isVerdict(input: unknown): input is ReviewVerdict["verdict"] {

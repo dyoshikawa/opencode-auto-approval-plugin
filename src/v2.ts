@@ -52,7 +52,7 @@ export function createV2SessionClient(context: Context): ReviewSessionClient {
         agent: reviewerAgentName,
         // Repeated on the session so the agent staying read-only does not
         // depend on nothing else redefining it.
-        permissions: reviewerPermissions,
+        permissions: [...reviewerPermissions],
         ...(model ? { model: toModelRef(model) } : {}),
       });
       return { sessionID: session.id };
