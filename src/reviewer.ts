@@ -18,46 +18,38 @@ export type ReviewVerdict = {
   reason: string;
 };
 
+/**
+ * Transport between the reviewer and an OpenCode session. Implemented once per
+ * plugin API generation (V1 SDK client, V2 plugin context) so the review logic
+ * stays independent of how a session is created and prompted.
+ */
 export type ReviewSessionClient = {
-  session: {
-    create(input: { query: { directory: string } }): Promise<unknown>;
-    prompt(input: {
-      path: { id: string };
-      query: { directory: string };
-      body: {
-        agent: string;
-        model?: ModelReference;
-        parts: Array<{ type: "text"; text: string }>;
-        tools: Record<string, boolean>;
-      };
-    }): Promise<unknown>;
-    abort?(input: { path: { id: string }; query: { directory: string } }): Promise<unknown>;
-  };
+  /** Creates an isolated reviewer session and returns its ID. */
+  create(input: { model?: ModelReference }): Promise<{ sessionID: string }>;
+  /** Sends the review prompt and resolves with the reviewer's reply text. */
+  prompt(input: { sessionID: string; model?: ModelReference; text: string }): Promise<string>;
+  /** Best-effort cancellation after a timeout or failure. */
+  abort(input: { sessionID: string }): Promise<unknown>;
 };
 
 export const reviewerAgentName = "auto-approval-reviewer";
 
-const reviewerTools = {
-  read: true,
-  glob: true,
-  grep: true,
-  lsp: true,
-};
+export const reviewerAgentDescription = "Read-only reviewer for auto-approval decisions.";
+
+export const reviewerAgentPrompt =
+  "You are a security reviewer. You may inspect the workspace only through read, glob, grep, and lsp. Never modify files, run shell commands, access the network, use MCP tools, or delegate work.";
+
+/** The only tools the reviewer may call; everything else is denied. */
+export const reviewerAllowedTools = ["read", "glob", "grep", "lsp"] as const;
 
 export class Reviewer {
   readonly #client: ReviewSessionClient;
   readonly #configuration: PluginConfiguration;
-  readonly #directory: string;
   readonly #reviewerSessionIDs = new Set<string>();
 
-  constructor(input: {
-    client: ReviewSessionClient;
-    configuration: PluginConfiguration;
-    directory: string;
-  }) {
+  constructor(input: { client: ReviewSessionClient; configuration: PluginConfiguration }) {
     this.#client = input.client;
     this.#configuration = input.configuration;
-    this.#directory = input.directory;
   }
 
   isReviewerSession(input: { sessionID: string }): boolean {
@@ -65,85 +57,23 @@ export class Reviewer {
   }
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const session = await this.#client.session.create({ query: { directory: this.#directory } });
-    const sessionID = sessionIdentifier(session);
+    const model = this.#configuration.reviewer.model ?? input.model;
+    const { sessionID } = await this.#client.create({ model });
     this.#reviewerSessionIDs.add(sessionID);
 
     try {
       const response = await withTimeout({
-        operation: this.#client.session.prompt({
-          path: { id: sessionID },
-          query: { directory: this.#directory },
-          body: {
-            agent: reviewerAgentName,
-            ...((this.#configuration.reviewer.model ?? input.model)
-              ? { model: this.#configuration.reviewer.model ?? input.model }
-              : {}),
-            parts: [{ type: "text", text: reviewerPrompt(input) }],
-            tools: reviewerTools,
-          },
-        }),
+        operation: this.#client.prompt({ sessionID, model, text: reviewerPrompt(input) }),
         timeoutMs: this.#configuration.reviewer.timeoutMs,
       });
-      return parseVerdict(responseText(response));
+      return parseVerdict(response);
     } catch (error) {
-      void this.#client.session.abort?.({
-        path: { id: sessionID },
-        query: { directory: this.#directory },
-      });
+      void this.#client.abort({ sessionID }).catch(() => undefined);
       throw error;
     } finally {
       this.#reviewerSessionIDs.delete(sessionID);
     }
   }
-}
-
-export function reviewerAgent(): Record<string, unknown> {
-  return {
-    description: "Read-only reviewer for auto-approval decisions.",
-    mode: "subagent",
-    prompt:
-      "You are a security reviewer. You may inspect the workspace only through read, glob, grep, and lsp. Never modify files, run shell commands, access the network, use MCP tools, or delegate work.",
-    tools: reviewerTools,
-    permission: {
-      "*": "deny",
-      read: "allow",
-      glob: "allow",
-      grep: "allow",
-      lsp: "allow",
-      edit: "deny",
-      bash: "deny",
-      task: "deny",
-      skill: "deny",
-      webfetch: "deny",
-      websearch: "deny",
-      question: "deny",
-      external_directory: "deny",
-    },
-  };
-}
-
-function sessionIdentifier(input: unknown): string {
-  if (
-    typeof input === "object" &&
-    input !== null &&
-    "id" in input &&
-    typeof input.id === "string"
-  ) {
-    return input.id;
-  }
-  if (
-    typeof input === "object" &&
-    input !== null &&
-    "data" in input &&
-    typeof input.data === "object" &&
-    input.data !== null &&
-    "id" in input.data &&
-    typeof input.data.id === "string"
-  ) {
-    return input.data.id;
-  }
-  throw new Error("OpenCode SDK did not return a reviewer session ID.");
 }
 
 function reviewerPrompt(input: ReviewRequest): string {
@@ -170,17 +100,6 @@ function reviewerPrompt(input: ReviewRequest): string {
   ].join("\n");
 }
 
-function responseText(input: unknown): string {
-  const response = unwrapData(input);
-  if (!isRecord(response) || !Array.isArray(response.parts)) {
-    throw new Error("OpenCode SDK did not return reviewer message parts.");
-  }
-
-  return response.parts
-    .flatMap((part) => (isRecord(part) && typeof part.text === "string" ? [part.text] : []))
-    .join("\n");
-}
-
 function parseVerdict(input: string): ReviewVerdict {
   const match = input.match(/\{[\s\S]*\}/);
   if (!match) {
@@ -196,11 +115,6 @@ function parseVerdict(input: string): ReviewVerdict {
 
 function isVerdict(input: unknown): input is ReviewVerdict["verdict"] {
   return input === "allow" || input === "deny" || input === "escalate";
-}
-
-function unwrapData(input: unknown): unknown {
-  if (isRecord(input) && "data" in input) return input.data;
-  return input;
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

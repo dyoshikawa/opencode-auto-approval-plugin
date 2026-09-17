@@ -7,10 +7,33 @@ The reviewer runs in its own OpenCode session. It may inspect the workspace with
 `grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or
 start subagents.
 
+## Supported OpenCode versions
+
+The package ships both plugin API generations in one default export, so the same version works on:
+
+| OpenCode      | Plugin API                             | Config key |
+| ------------- | -------------------------------------- | ---------- |
+| 2.x           | V2 (`@opencode/plugin`, `setup()`)     | `plugins`  |
+| 1.18.29 – 1.x | V1 (`@opencode-ai/plugin`, `server()`) | `plugin`   |
+
+OpenCode releases before 1.18.29 only accept a bare function as the plugin export and cannot load
+this package; use `opencode-auto-approval-plugin@0.1.x` there.
+
 ## Install
 
-OpenCode installs npm plugins listed in `opencode.json` automatically. Add the package to the
-project or global OpenCode configuration:
+OpenCode installs npm plugins listed in its configuration automatically. Add the package to the
+project or global OpenCode configuration.
+
+OpenCode 2.x (`opencode.json`):
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["opencode-auto-approval-plugin"],
+}
+```
+
+OpenCode 1.x:
 
 ```jsonc
 {
@@ -25,8 +48,29 @@ files placed directly in `.opencode/plugins/`.
 
 ## Configuration
 
-Use a plugin tuple to pass options. The defaults are `mode: "on-ask"`, a 30-second review timeout,
-and the provider/model of the main session.
+The defaults are `mode: "on-ask"`, a 30-second review timeout, and the provider/model of the main
+session.
+
+OpenCode 2.x passes options through a `{ "package", "options" }` entry:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "mode": "on-ask",
+        "reviewer": {
+          "timeoutMs": 30000,
+        },
+      },
+    },
+  ],
+}
+```
+
+OpenCode 1.x uses a plugin tuple instead:
 
 ```jsonc
 {
@@ -50,10 +94,10 @@ The plugin never reads or manages API keys; authentication remains entirely in O
 
 ```jsonc
 {
-  "plugin": [
-    [
-      "opencode-auto-approval-plugin",
-      {
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
         "mode": "all-tools",
         "reviewer": {
           "model": {
@@ -63,22 +107,27 @@ The plugin never reads or manages API keys; authentication remains entirely in O
           "timeoutMs": 15000,
         },
       },
-    ],
+    },
   ],
 }
 ```
 
 ### Review modes
 
-| Mode               | Reviewed operations                                           | `allow`                      | `deny`                               | `escalate` / reviewer failure                             |
-| ------------------ | ------------------------------------------------------------- | ---------------------------- | ------------------------------------ | --------------------------------------------------------- |
-| `on-ask` (default) | Only operations that OpenCode already decided should ask      | Sends an SDK `once` approval | Leaves the OpenCode approval pending | Leaves the OpenCode approval pending                      |
-| `all-tools`        | Every intercepted tool call, including OpenCode-allowed calls | Runs the tool                | Blocks the tool                      | Blocks the tool and reports that human review is required |
+| Mode               | Reviewed operations                                           | `allow`                   | `deny`                               | `escalate` / reviewer failure                             |
+| ------------------ | ------------------------------------------------------------- | ------------------------- | ------------------------------------ | --------------------------------------------------------- |
+| `on-ask` (default) | Only operations that OpenCode already decided should ask      | Approves the request once | Leaves the OpenCode approval pending | Leaves the OpenCode approval pending                      |
+| `all-tools`        | Every intercepted tool call, including OpenCode-allowed calls | Runs the tool             | Blocks the tool                      | Blocks the tool and reports that human review is required |
 
-OpenCode's public plugin API does not currently provide a way to create and await a new permission
-dialogue from `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict:
-the tool does not run and the user must explicitly retry after reviewing the reported reason. In
-contrast, `on-ask` preserves OpenCode's native human permission UI.
+On OpenCode 2.x, `on-ask` runs inside the `permission.evaluate` hook: an `allow` verdict turns the
+pending `ask` into `allow` before the permission prompt is shown, and the reviewer's reason is
+attached as the permission message. On OpenCode 1.x the plugin listens for the permission bus
+event and replies `once` through the SDK. In both cases anything other than `allow` leaves
+OpenCode's native human permission UI untouched.
+
+OpenCode's plugin API does not provide a way to create and await a new permission dialogue from
+`tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict: the tool does
+not run and the user must explicitly retry after reviewing the reported reason.
 
 Explicit OpenCode `deny` rules always remain in effect. The plugin is an additional review layer;
 it never turns a built-in deny into an allow.
@@ -206,8 +255,10 @@ Actions and the `.github/workflows/publish.yml` workflow. For each later release
 version on `main`, create its matching `v<version>` tag, and publish the GitHub Release.
 
 OpenCode publishes and distributes plugins as ordinary npm packages: users add the package name to
-the `plugin` array in `opencode.json`, and OpenCode installs it with Bun at startup. See the
-[OpenCode plugin documentation](https://opencode.ai/docs/plugins/) for the loader and cache behavior.
+the `plugins` (2.x) or `plugin` (1.x) array in `opencode.json`, and OpenCode installs it at startup.
+See the [OpenCode plugin documentation](https://opencode.ai/v2/docs/build/plugins/) and the
+[V1 migration guide](https://opencode.ai/v2/docs/build/plugins/migrate-v1/) for the loader and
+cache behavior.
 
 ## License
 
