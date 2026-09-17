@@ -28,6 +28,11 @@ const defaultDependencies: AutoApprovalPluginDependencies = {
     }),
 };
 
+// opencode renamed the permission bus event from "permission.updated" to
+// "permission.asked" in 1.18.x. Accept both names so the plugin keeps working
+// across opencode versions.
+const PERMISSION_ASK_EVENT_TYPES = new Set(["permission.updated", "permission.asked"]);
+
 export function createAutoApprovalPlugin(
   input: {
     dependencies?: Partial<AutoApprovalPluginDependencies>;
@@ -63,7 +68,7 @@ export function createAutoApprovalPlugin(
         return Promise.resolve();
       },
       event: async ({ event }) => {
-        if (configuration.mode !== "on-ask" || event.type !== "permission.updated") return;
+        if (configuration.mode !== "on-ask" || !PERMISSION_ASK_EVENT_TYPES.has(event.type)) return;
 
         const request = event.properties as PermissionRequest;
         if (reviewer.isReviewerSession({ sessionID: request.sessionID })) return;
