@@ -70,6 +70,7 @@
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.18.29",
+    "@opencode/plugin": "2.0.3",
     "@secretlint/secretlint-rule-preset-recommend": "13.0.5",
     "@tsconfig/node22": "22.0.6",
     "@types/node": "26.4.1",
@@ -89,7 +90,16 @@
     "vitest": "5.0.0"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.18.16 <2"
+    "@opencode-ai/plugin": ">=1.18.29 <2",
+    "@opencode/plugin": ">=2.0.0 <3"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    },
+    "@opencode/plugin": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22.0.0",

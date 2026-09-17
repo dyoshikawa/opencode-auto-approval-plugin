@@ -4,6 +4,7 @@
 allowBuilds:
   esbuild: false
   msgpackr-extract: false
+  protobufjs: false
   simple-git-hooks: false
   tldjs: false
 ignoreScripts: false
