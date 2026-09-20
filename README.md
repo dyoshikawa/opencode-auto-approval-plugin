@@ -3,9 +3,10 @@
 An [OpenCode](https://opencode.ai/) plugin that sends tool operations to a read-only AI reviewer
 before automatically approving them.
 
-The reviewer runs in its own OpenCode session. It may inspect the workspace with `read`, `glob`,
+By default, the reviewer runs in its own OpenCode session. It may inspect the workspace with `read`, `glob`,
 `grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or
-start subagents.
+start subagents. The optional Jev backend sends the initial operation data to TypeSafe AI over HTTP,
+without creating a session or using tools.
 
 ## Supported OpenCode versions
 
@@ -48,7 +49,7 @@ TypeScript files placed directly in those directories.
 
 ## Configuration
 
-The defaults are `mode: "on-ask"`, a 30-second review timeout, and the provider/model of the main
+The defaults are `mode: "on-ask"`, `reviewer.backend: "opencode"`, a 30-second review timeout, and the provider/model of the main
 session.
 
 OpenCode 2.x passes options through a `{ "package", "options" }` entry:
@@ -90,7 +91,8 @@ OpenCode 1.x uses a plugin tuple instead:
 ```
 
 Set `reviewer.model` to run reviews through a separately configured OpenCode provider and model.
-The plugin never reads or manages API keys; authentication remains entirely in OpenCode.
+With the default `opencode` backend, the plugin never reads or manages API keys; authentication
+remains entirely in OpenCode. The `jev` backend reads its API key from plugin options or the environment.
 
 ```jsonc
 {
@@ -111,6 +113,80 @@ The plugin never reads or manages API keys; authentication remains entirely in O
   ],
 }
 ```
+
+### Jev backend
+
+The optional Jev backend sends the initial operation data to TypeSafe AI over HTTP instead of
+creating an OpenCode reviewer session.
+
+For local development or testing from a checkout, build the package with `pnpm build` and reference
+the local directory path (e.g. `"package": "./path/to/opencode-auto-approval-plugin"`) or link it
+through an npm/pnpm workspace. Restart OpenCode to load changes.
+
+Set `TYPESAFE_API_KEY` in the environment of the OpenCode process. For example, use the placeholder
+`export TYPESAFE_API_KEY="YOUR_API_KEY"` with your own key. OpenCode 2.x:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "mode": "on-ask",
+        "reviewer": {
+          "backend": "jev",
+          "timeoutMs": 15000,
+          "jev": { "model": "jev-1.13.0" },
+        },
+      },
+    },
+  ],
+}
+```
+
+OpenCode 1.x, showing explicit file options (use your own key and keep the file private):
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    [
+      "opencode-auto-approval-plugin",
+      {
+        "mode": "on-ask",
+        "reviewer": {
+          "backend": "jev",
+          "timeoutMs": 15000,
+          "jev": {
+            "apiKey": "YOUR_API_KEY",
+            "baseURL": "https://api.typesafe.ai",
+            "model": "jev-1.13.0",
+          },
+        },
+      },
+    ],
+  ],
+}
+```
+
+Both generations accept the same reviewer options. Omit `apiKey` to use `TYPESAFE_API_KEY`;
+omit `baseURL` to use `TYPESAFE_BASE_URL` or, if unset, `https://api.typesafe.ai`. File options
+take precedence. `model` defaults to `jev-1.13.0`; `jev-latest` is also supported.
+`reviewer.model` applies only to the OpenCode backend.
+
+Jev configuration is validated at plugin startup. A missing key or invalid base URL fails startup.
+Base URLs must use HTTP or HTTPS, may include a proxy path prefix, and must not contain credentials,
+query parameters, fragments, or the `/v1/systemone` endpoint suffix. The plugin appends that suffix
+and refuses redirects. The OpenCode backend ignores Jev options and `TYPESAFE_*` environment variables.
+
+Jev receives the same initial `source`, `action`, `resource`, and `userIntent` as the OpenCode
+reviewer, without truncation or additional file reads. This sends operation data to the configured
+service. The API key is sent only as a Bearer authorization header. Jev's `choice` maps directly to
+`allow`, `deny`, or `escalate`; the displayed reason is a plugin-generated decision summary, not a
+model explanation. Optional confidence is displayed as a statistic, with no approval threshold.
+There is no automatic fallback to the OpenCode backend. The timeout covers the HTTP request and
+response body; runtime failures retain the review mode behavior below.
 
 ### Review modes
 
