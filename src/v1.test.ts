@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { Reviewer } from "./reviewer.js";
 import { createV1Plugin, createV1SessionClient, reviewerAgentConfig } from "./v1.js";
 
 type ReviewerVerdict = "allow" | "deny" | "escalate";
@@ -27,6 +28,54 @@ function createPlugin(input: { verdict: ReviewerVerdict }) {
 }
 
 describe("V1 plugin (opencode 1.x)", () => {
+  it("recovers current-session history without a captured prompt after restart", async () => {
+    const { context } = createContext();
+    const messages = vi.fn(async () => ({
+      data: [
+        {
+          info: { role: "assistant", sessionID: "session-1" },
+          parts: [{ type: "text", text: "I propose pwd" }],
+        },
+        {
+          info: { role: "user", sessionID: "session-1" },
+          parts: [{ type: "text", text: "execute that plan" }],
+        },
+      ],
+    }));
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(
+      { ...context, client: { ...context.client, session: { messages } } } as never,
+      {},
+    );
+    await hooks.event?.({
+      event: {
+        type: "permission.asked",
+        properties: {
+          id: "p",
+          sessionID: "session-1",
+          permission: "bash",
+          patterns: ["pwd"],
+          metadata: { command: "pwd" },
+        },
+      },
+    } as never);
+    expect(messages).toHaveBeenCalledWith({
+      path: { id: "session-1" },
+      query: { directory: "/workspace", limit: 32 },
+    });
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userIntent: "execute that plan",
+        conversation: {
+          turns: [
+            { role: "assistant", text: "I propose pwd" },
+            { role: "user", text: "execute that plan" },
+          ],
+          incomplete: true,
+        },
+      }),
+    );
+  });
   it("registers a reviewer agent that only exposes read-only tools", async () => {
     const { context } = createContext();
     const { plugin } = createPlugin({ verdict: "allow" });
@@ -141,35 +190,85 @@ describe("V1 plugin (opencode 1.x)", () => {
     expect(reply).not.toHaveBeenCalled();
   });
 
-  it("auto-approves a permission.asked event (opencode >= 1.18 event name)", async () => {
+  it.each([
+    { type: "permission.asked", fields: { permission: "bash", patterns: ["pwd"] } },
+    { type: "permission.updated", fields: { type: "bash", pattern: ["pwd"] } },
+    {
+      type: "permission.asked",
+      fields: { permission: "bash", patterns: ["pwd"], type: "legacy", pattern: "ignored" },
+    },
+  ])("normalizes $type fields before review and audit", async ({ type, fields }) => {
     const { context, reply } = createContext();
-    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const log = vi.fn();
+    const prompt = vi.fn(async () => '{"verdict":"allow","reason":"read-only"}');
+    const review = vi.fn();
+    const plugin = createV1Plugin({
+      createReviewer: ({ configuration }) => {
+        const reviewer = new Reviewer({
+          configuration,
+          client: {
+            create: async () => ({ sessionID: "review-session" }),
+            prompt,
+            abort: async () => undefined,
+          },
+          auditLogger: { log },
+        });
+        review.mockImplementation((request) => reviewer.review(request));
+        return { review, isReviewerSession: () => false } as never;
+      },
+    });
     const hooks = await plugin(context as never, {});
 
+    await hooks["chat.message"]?.({ sessionID: "session-1" } as never, {
+      message: {} as never,
+      parts: [{ type: "text", text: "run pwd" }] as never,
+    });
     await hooks.event?.({
       event: {
         // Not yet in the pinned @opencode-ai/plugin event union, but emitted
         // by opencode >= 1.18 at runtime.
-        type: "permission.asked" as unknown as "permission.updated",
+        type: type as "permission.updated",
         properties: {
           id: "permission-1",
           sessionID: "session-1",
           messageID: "message-1",
-          type: "bash",
+          ...fields,
           title: "Run bash",
           metadata: {},
           time: { created: 0 },
         },
-      },
+      } as never,
     });
 
-    expect(review).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "bash", resource: { pattern: ["pwd"], metadata: {} } }),
+    );
+    expect(log).toHaveBeenCalledWith({
+      entry: expect.objectContaining({ action: "bash", verdict: "allow", confidence: null }),
+    });
     expect(reply).toHaveBeenCalledWith({
       path: { id: "session-1", permissionID: "permission-1" },
       query: { directory: "/workspace" },
       body: { response: "once" },
     });
   });
+
+  it.each([undefined, "", "   ", 42])(
+    "leaves missing or invalid permission %s for a human",
+    async (permission) => {
+      const { context, reply } = createContext();
+      const { plugin, review } = createPlugin({ verdict: "allow" });
+      const hooks = await plugin(context as never, {});
+      await hooks.event?.({
+        event: {
+          type: "permission.asked",
+          properties: { id: "permission-1", sessionID: "session-1", permission, patterns: ["pwd"] },
+        } as never,
+      });
+      expect(review).not.toHaveBeenCalled();
+      expect(reply).not.toHaveBeenCalled();
+    },
+  );
 
   it("ignores unrelated bus events", async () => {
     const { context, reply } = createContext();

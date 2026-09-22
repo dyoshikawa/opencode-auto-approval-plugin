@@ -9,8 +9,15 @@ export type ModelReference = {
   modelID: string;
 };
 
+export type AuditLogConfiguration = {
+  enabled: boolean;
+  includeCommand: boolean;
+  path?: string;
+};
+
 export type PluginConfiguration = {
   mode: ReviewerMode;
+  auditLog: AuditLogConfiguration;
   reviewer: {
     model?: ModelReference;
     timeoutMs: number;
@@ -25,8 +32,15 @@ const modelReferenceSchema = z.object({
   modelID: z.string(),
 });
 
+const auditLogSchema = z.object({
+  enabled: z.optional(z.boolean()),
+  includeCommand: z.optional(z.boolean()),
+  path: z.optional(z.string().check(z.trim(), z.minLength(1))),
+});
+
 const pluginConfigurationSchema = z.object({
   mode: z.optional(z.enum(reviewerModes)),
+  auditLog: z.optional(auditLogSchema),
   reviewer: z.optional(
     z.object({
       backend: z.optional(z.enum(["opencode", "jev"])),
@@ -36,6 +50,20 @@ const pluginConfigurationSchema = z.object({
     }),
   ),
 });
+
+function resolveAuditLogConfiguration(input: {
+  auditLog?: {
+    enabled?: boolean;
+    includeCommand?: boolean;
+    path?: string;
+  };
+}): AuditLogConfiguration {
+  return {
+    enabled: input.auditLog?.enabled ?? false,
+    includeCommand: input.auditLog?.includeCommand ?? true,
+    path: input.auditLog?.path,
+  };
+}
 
 export function parsePluginConfiguration(input: unknown): PluginConfiguration {
   const result = z.safeParse(pluginConfigurationSchema, input);
@@ -48,8 +76,9 @@ export function parsePluginConfiguration(input: unknown): PluginConfiguration {
     timeoutMs: result.data.reviewer?.timeoutMs ?? 30_000,
   };
   const mode = result.data.mode ?? "on-ask";
+  const auditLog = resolveAuditLogConfiguration({ auditLog: result.data.auditLog });
   if (result.data.reviewer?.backend !== "jev") {
-    return { mode, reviewer: { ...common, backend: "opencode" } };
+    return { mode, auditLog, reviewer: { ...common, backend: "opencode" } };
   }
 
   // Resolve credentials only for the selected backend, before any review can run.
@@ -74,6 +103,7 @@ export function parsePluginConfiguration(input: unknown): PluginConfiguration {
     options.data.baseURL ?? (process.env.TYPESAFE_BASE_URL?.trim() || "https://api.typesafe.ai");
   return {
     mode,
+    auditLog,
     reviewer: {
       ...common,
       backend: "jev",

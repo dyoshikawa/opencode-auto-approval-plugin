@@ -8,6 +8,7 @@ describe("parsePluginConfiguration", () => {
   it("uses the safe on-ask defaults", () => {
     expect(parsePluginConfiguration({})).toEqual({
       mode: "on-ask",
+      auditLog: { enabled: false, includeCommand: true, path: undefined },
       reviewer: { backend: "opencode", timeoutMs: 30_000 },
     });
   });
@@ -23,6 +24,7 @@ describe("parsePluginConfiguration", () => {
       }),
     ).toEqual({
       mode: "all-tools",
+      auditLog: { enabled: false, includeCommand: true, path: undefined },
       reviewer: {
         backend: "opencode",
         model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
@@ -121,5 +123,21 @@ describe("parsePluginConfiguration", () => {
     expect(() =>
       parsePluginConfiguration({ reviewer: { backend: "jev", jev: { apiKey } } }),
     ).toThrow("invalid Jev configuration");
+  });
+
+  it("parses auditLog options and preserves safe defaults", () => {
+    expect(
+      parsePluginConfiguration({
+        auditLog: {
+          enabled: true,
+          includeCommand: false,
+          path: "custom/path.jsonl",
+        },
+      }).auditLog,
+    ).toEqual({
+      enabled: true,
+      includeCommand: false,
+      path: "custom/path.jsonl",
+    });
   });
 });
