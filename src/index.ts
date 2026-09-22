@@ -1,10 +1,25 @@
+import { createAuditLogger, resolveAuditLogPath } from "./audit.js";
 import { Reviewer } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { createV1Plugin } from "./v1.js";
 import { createV2Plugin } from "./v2.js";
 
 const defaultDependencies: PluginDependencies = {
-  createReviewer: (input) => new Reviewer(input),
+  createReviewer: (input) => {
+    const logPath = resolveAuditLogPath({
+      configuredPath: input.configuration.auditLog.path,
+      pluginDirectory: input.pluginDirectory ?? process.cwd(),
+    });
+    const auditLogger = createAuditLogger({
+      enabled: input.configuration.auditLog.enabled,
+      logPath,
+    });
+    return new Reviewer({
+      client: input.client,
+      configuration: input.configuration,
+      auditLogger,
+    });
+  },
 };
 
 /**

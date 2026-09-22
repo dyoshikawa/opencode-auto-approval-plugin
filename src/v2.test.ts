@@ -14,16 +14,21 @@ function createContext(input: { options?: Record<string, unknown> } = {}) {
     create: vi.fn(async () => ({ id: "review-session" })),
     prompt: vi.fn(async () => ({ id: "inbox-1" })),
     wait: vi.fn(async () => undefined),
-    context: vi.fn(async (): Promise<Record<string, unknown>[]> => [
-      { type: "user", text: "hello" },
-      {
-        type: "assistant",
-        content: [
-          { type: "reasoning", text: "thinking" },
-          { type: "text", text: '{"verdict":"allow","reason":"safe"}' },
-        ],
-      },
-    ]),
+    context: vi.fn(
+      async ({ sessionID }: { sessionID: string }): Promise<Record<string, unknown>[]> =>
+        sessionID !== "review-session"
+          ? []
+          : [
+              { type: "user", text: "hello" },
+              {
+                type: "assistant",
+                content: [
+                  { type: "reasoning", text: "thinking" },
+                  { type: "text", text: '{"verdict":"allow","reason":"safe"}' },
+                ],
+              },
+            ],
+    ),
     interrupt: vi.fn(async () => ({})),
     get: vi.fn(async () => ({ id: "session-1", model: { providerID: "openai", id: "gpt-5.6" } })),
     hook: vi.fn(async (name: string, callback: Hook) => {
@@ -86,6 +91,37 @@ function askEvent(overrides: Record<string, unknown> = {}) {
 }
 
 describe("V2 plugin (opencode 2.x)", () => {
+  it("recovers history after restart and rejects consent changed during review", async () => {
+    const { context, hooks, session } = createContext();
+    session.context.mockResolvedValue([
+      { type: "assistant", content: [{ type: "text", text: "I propose pwd" }] },
+      { type: "user", text: "execute that plan" },
+    ]);
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    const event = askEvent();
+    await hooks["permission.evaluate"]?.(event);
+    expect(session.context).toHaveBeenCalledWith({ sessionID: "session-1" });
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userIntent: "execute that plan",
+        conversation: {
+          turns: [
+            { role: "assistant", text: "I propose pwd" },
+            { role: "user", text: "execute that plan" },
+          ],
+          incomplete: true,
+        },
+      }),
+    );
+    review.mockImplementationOnce(async () => {
+      await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "stop" } });
+      return { verdict: "allow", reason: "obsolete" };
+    });
+    const changed = askEvent();
+    await hooks["permission.evaluate"]?.(changed);
+    expect(changed.effect).toBe("ask");
+  });
   it("registers a hidden read-only reviewer subagent", async () => {
     const { context, agents } = createContext();
     const { plugin } = createPlugin({ verdict: "allow" });
@@ -117,6 +153,7 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(review).toHaveBeenCalledWith({
       source: "permission-request",
       sessionID: "session-1",
+      conversation: { turns: [{ role: "user", text: "push my branch" }], incomplete: true },
       action: "bash",
       resource: { resources: ["git push"], metadata: {} },
       userIntent: "push my branch",

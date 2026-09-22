@@ -2,6 +2,7 @@ import type { Plugin } from "@opencode-ai/plugin";
 
 import type { ModelReference } from "./config.js";
 import { parsePluginConfiguration } from "./config.js";
+import { conversationTurns, humanText, readConversation } from "./conversation.js";
 import type { ReviewSessionClient } from "./reviewer.js";
 import {
   reviewerAgentDescription,
@@ -20,7 +21,9 @@ import { isRecord, reviewForApproval, reviewToolCallOrThrow, textFromParts } fro
 type PermissionRequest = {
   id: string;
   sessionID: string;
-  type: string;
+  permission?: string;
+  patterns?: string[];
+  type?: string;
   pattern?: string | string[];
   metadata?: Record<string, unknown>;
 };
@@ -34,6 +37,10 @@ const reviewerTools = Object.fromEntries(reviewerAllowedTools.map((tool) => [too
 
 type SdkClient = {
   session: {
+    messages?(input: {
+      path: { id: string };
+      query: { directory: string; limit: number };
+    }): Promise<unknown>;
     create(input: { query: { directory: string } }): Promise<unknown>;
     prompt(input: {
       path: { id: string };
@@ -115,9 +122,27 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         directory: context.directory,
       }),
       configuration,
+      pluginDirectory: context.directory,
     });
     const models = new Map<string, ModelReference>();
     const intents = new Map<string, string>();
+    const conversation = (sessionID: string) =>
+      readConversation({
+        historyMayBeIncomplete: true,
+        latest: () => intents.get(sessionID),
+        load: async () => {
+          const client = context.client as unknown as SdkClient;
+          if (!client.session.messages) throw new Error("Session history is unavailable.");
+          return conversationTurns({
+            messages: await client.session.messages({
+              path: { id: sessionID },
+              query: { directory: context.directory, limit: 32 },
+            }),
+            generation: "v1",
+            sessionID,
+          });
+        },
+      });
 
     return {
       config: async (config) => {
@@ -128,7 +153,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         // The reviewer's own prompts carry no user intent worth keeping.
         if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return Promise.resolve();
         if (event.model) models.set(event.sessionID, event.model);
-        intents.set(event.sessionID, textFromParts(output.parts));
+        intents.set(event.sessionID, humanText(output.parts));
         return Promise.resolve();
       },
       "chat.params": (event) => {
@@ -143,20 +168,24 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         if (configuration.mode !== "on-ask" || !PERMISSION_ASK_EVENT_TYPES.has(event.type)) return;
 
         const request = event.properties as PermissionRequest;
+        // Current hosts use permission/patterns; the legacy SDK uses type/pattern.
+        const action = request.permission ?? request.type;
+        if (typeof action !== "string" || !action.trim()) return;
         if (reviewer.isReviewerSession({ sessionID: request.sessionID })) return;
 
+        const capturedIntent = intents.get(request.sessionID);
         const decision = await reviewForApproval({
           reviewer,
           request: {
             source: "permission-request",
             sessionID: request.sessionID,
-            action: request.type,
-            resource: { pattern: request.pattern, metadata: request.metadata },
-            userIntent: intents.get(request.sessionID),
+            action,
+            resource: { pattern: request.patterns ?? request.pattern, metadata: request.metadata },
+            ...(await conversation(request.sessionID)),
             model: models.get(request.sessionID),
           },
         });
-        if (decision === undefined) return;
+        if (decision === undefined || intents.get(request.sessionID) !== capturedIntent) return;
 
         try {
           await context.client.postSessionIdPermissionsPermissionId({
@@ -175,6 +204,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         )
           return;
 
+        const capturedIntent = intents.get(event.sessionID);
         await reviewToolCallOrThrow({
           reviewer,
           request: {
@@ -182,10 +212,13 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
             sessionID: event.sessionID,
             action: event.tool,
             resource: output.args,
-            userIntent: intents.get(event.sessionID),
+            ...(await conversation(event.sessionID)),
             model: models.get(event.sessionID),
           },
         });
+        if (intents.get(event.sessionID) !== capturedIntent) {
+          throw new Error("User intent changed during review; human review is required.");
+        }
       },
     };
   };

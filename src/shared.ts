@@ -5,6 +5,7 @@ export type PluginDependencies = {
   createReviewer(input: {
     client: ReviewSessionClient;
     configuration: PluginConfiguration;
+    pluginDirectory?: string;
   }): Reviewer;
 };
 
