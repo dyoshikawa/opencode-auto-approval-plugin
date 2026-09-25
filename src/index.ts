@@ -1,10 +1,14 @@
-import { Reviewer } from "./reviewer.js";
+import { JevReviewer } from "./jev-reviewer.js";
+import { OpenCodeReviewer } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { createV1Plugin } from "./v1.js";
 import { createV2Plugin } from "./v2.js";
 
 const defaultDependencies: PluginDependencies = {
-  createReviewer: (input) => new Reviewer(input),
+  createReviewer: (input) =>
+    input.configuration.reviewer.backend === "jev"
+      ? new JevReviewer({ configuration: input.configuration })
+      : new OpenCodeReviewer(input),
 };
 
 /**

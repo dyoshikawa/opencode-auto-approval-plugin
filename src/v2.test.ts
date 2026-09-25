@@ -105,6 +105,18 @@ describe("V2 plugin (opencode 2.x)", () => {
     });
   });
 
+  it("registers no subagent for the jev backend", async () => {
+    const { context, agents } = createContext({
+      options: { reviewer: { backend: "jev", jev: { apiKey: "test-key" } } },
+    });
+    const { plugin } = createPlugin({ verdict: "allow" });
+
+    await plugin.setup(context as never);
+
+    expect(context.agent.transform).not.toHaveBeenCalled();
+    expect(agents.size).toBe(0);
+  });
+
   it("turns an ask into allow only when the reviewer allows it", async () => {
     const { context, hooks } = createContext();
     const { plugin, review } = createPlugin({ verdict: "allow" });
