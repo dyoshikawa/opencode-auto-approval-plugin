@@ -50,7 +50,14 @@ export const reviewerAllowedTools = ["read", "glob", "grep", "lsp"] as const;
 /** The reason is model output shown to the user: one line, no control characters, capped. */
 const MAX_REASON_LENGTH = 300;
 
-export class Reviewer {
+/** A review backend: the opencode reviewer session or the Jev decision API. */
+export type Reviewer = {
+  review(input: ReviewRequest): Promise<ReviewVerdict>;
+  /** Whether a session belongs to the reviewer itself and must not be reviewed. */
+  isReviewerSession(input: { sessionID: string }): boolean;
+};
+
+export class OpenCodeReviewer implements Reviewer {
   readonly #client: ReviewSessionClient;
   readonly #configuration: PluginConfiguration;
   readonly #reviewerSessionIDs = new Set<string>();
@@ -119,11 +126,14 @@ function parseVerdict(input: string): ReviewVerdict {
   if (!isRecord(parsed) || !isVerdict(parsed.verdict) || typeof parsed.reason !== "string") {
     throw new Error("Reviewer response did not match the verdict schema.");
   }
-  const reason = parsed.reason
+  return { verdict: parsed.verdict, reason: sanitizeReason(parsed.reason) };
+}
+
+export function sanitizeReason(input: string): string {
+  return input
     .replace(/[\s\p{Cc}\p{Cf}]+/gu, " ")
     .trim()
     .slice(0, MAX_REASON_LENGTH);
-  return { verdict: parsed.verdict, reason };
 }
 
 function isVerdict(input: unknown): input is ReviewVerdict["verdict"] {

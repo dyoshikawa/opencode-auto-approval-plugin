@@ -3,9 +3,10 @@
 An [OpenCode](https://opencode.ai/) plugin that sends tool operations to a read-only AI reviewer
 before automatically approving them.
 
-The reviewer runs in its own OpenCode session. It may inspect the workspace with `read`, `glob`,
-`grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or
-start subagents.
+By default the reviewer runs in its own OpenCode session. It may inspect the workspace with `read`,
+`glob`, `grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP
+tools, or start subagents. Alternatively, decisions can be delegated to the
+[Jev](#jev-reviewer-backend) decision model over HTTP.
 
 ## Supported OpenCode versions
 
@@ -90,7 +91,8 @@ OpenCode 1.x uses a plugin tuple instead:
 ```
 
 Set `reviewer.model` to run reviews through a separately configured OpenCode provider and model.
-The plugin never reads or manages API keys; authentication remains entirely in OpenCode.
+With the default `opencode` backend the plugin never reads or manages API keys; authentication
+remains entirely in OpenCode.
 
 ```jsonc
 {
@@ -112,6 +114,73 @@ The plugin never reads or manages API keys; authentication remains entirely in O
 }
 ```
 
+### Jev reviewer backend
+
+Set `reviewer.backend` to `"jev"` to have [TypeSafe AI](https://typesafe.ai/)'s Jev decision model
+judge each operation instead of an OpenCode session. The plugin sends one request to the System One
+API with the operation (`source`, `action`, `resource`, and the user's latest prompt) and a single
+`allow` / `deny` / `escalate` choice. No reviewer agent or session is created, the workspace is not
+inspected, and a review typically answers in well under a second.
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "mode": "on-ask",
+        "reviewer": {
+          "backend": "jev",
+          "timeoutMs": 10000,
+          "jev": {
+            "model": "jev-latest",
+            "minAllowProbability": 0.6,
+          },
+        },
+      },
+    },
+  ],
+}
+```
+
+| Option                             | Environment variable | Default                   | Description                                                     |
+| ---------------------------------- | -------------------- | ------------------------- | --------------------------------------------------------------- |
+| `reviewer.backend`                 | —                    | `"opencode"`              | `"opencode"` (reviewer session) or `"jev"`                      |
+| `reviewer.jev.apiKey`              | `TYPESAFE_API_KEY`   | — (required for `jev`)    | TypeSafe AI API key                                             |
+| `reviewer.jev.baseURL`             | `TYPESAFE_BASE_URL`  | `https://api.typesafe.ai` | API origin; a bare HTTPS origin (HTTP only for localhost)       |
+| `reviewer.jev.model`               | —                    | `"jev-latest"`            | Jev model or alias; pin a version such as `jev-1.13.0`          |
+| `reviewer.jev.minAllowProbability` | —                    | `0.6`                     | An `allow` answered with a lower probability becomes `escalate` |
+
+- The key and the base URL come from the same place. With `reviewer.jev.apiKey`, only
+  `reviewer.jev.baseURL` applies (`TYPESAFE_BASE_URL` is ignored); with `TYPESAFE_API_KEY`, only
+  `TYPESAFE_BASE_URL` applies, and setting `reviewer.jev.baseURL` without a key next to it fails at
+  startup. This keeps one source from redirecting a key supplied by another.
+- Prefer the `TYPESAFE_API_KEY` environment variable: `opencode.json` is often committed, and a key
+  written there is shared with it. Surrounding whitespace in the key is trimmed.
+- The plugin fails at startup when the `jev` backend has no API key or an invalid base URL. The
+  variable is read by the process that loads the plugin: if OpenCode 2.x's background service was
+  already running, run `opencode service restart` after exporting it.
+- Jev returns a choice with calibrated probabilities rather than an explanation, so the verdict
+  reason reads like `Jev chose deny (allow 0.00, deny 0.99, escalate 0.01).` A hesitant `allow`
+  below `minAllowProbability` is escalated to a human; `deny` and `escalate` are taken as answered.
+- The operation leaves your machine: the resource holds the full command, file content of a
+  write or edit, and permission metadata such as diffs, and the user intent is your latest prompt.
+  All of it is sent to TypeSafe AI (or `baseURL`), so an edit of a secrets file sends those secrets.
+- A resource larger than 64,000 characters of JSON (for example a large file write) is sent as a
+  truncated preview, and a prompt longer than 16,000 characters is cut; an `allow` for either is
+  escalated, because Jev saw only part of it. With `on-ask` that leaves OpenCode's permission prompt;
+  with `all-tools` such a tool call is always blocked, and retrying the same call does not help —
+  split the write or switch to `on-ask`.
+- `baseURL` must use HTTPS unless it points at `localhost`. Whoever serves it receives the API key
+  and decides every verdict, so set it only in configuration you trust (not a repository's
+  `opencode.json` you have not reviewed) — the same holds for `minAllowProbability`, which lowers
+  the bar for an automatic approval.
+- Redirects are refused so the API key is never forwarded to another host, and the timeout covers
+  the whole request including the response body. HTTP errors (`402` out of credit, `429` rate
+  limited, `5xx` outage) are reported by status only and handled like any other reviewer failure.
+- `reviewer.model` has no effect with the `jev` backend, and `reviewer.jev` none with `opencode`. `jev-latest` follows new model releases,
+  which may shift verdicts; pin a version for stable behavior.
+
 ### Review modes
 
 | Mode               | Reviewed operations                                           | `allow`                   | `deny`                               | `escalate` / reviewer failure                             |
@@ -128,6 +197,9 @@ OpenCode's native human permission UI untouched.
 OpenCode's plugin API does not provide a way to create and await a new permission dialogue from
 `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict: the tool does
 not run and the user must explicitly retry after reviewing the reported reason.
+
+Both modes work the same way with either reviewer backend, except that the Jev backend always
+escalates an operation too large to send in full (see above).
 
 Explicit OpenCode `deny` rules always remain in effect. The plugin is an additional review layer;
 it never turns a built-in deny into an allow.

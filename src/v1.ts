@@ -108,7 +108,7 @@ export function reviewerAgentConfig(): Record<string, unknown> {
 
 export function createV1Plugin(dependencies: PluginDependencies): Plugin {
   return async (context, options = {}) => {
-    const configuration = parsePluginConfiguration(options);
+    const configuration = parsePluginConfiguration({ options });
     const reviewer = dependencies.createReviewer({
       client: createV1SessionClient({
         client: context.client as unknown as SdkClient,
@@ -121,6 +121,8 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
 
     return {
       config: async (config) => {
+        // The Jev backend needs no reviewer agent.
+        if (configuration.reviewer.backend !== "opencode") return;
         config.agent ??= {};
         config.agent[reviewerAgentName] = reviewerAgentConfig();
       },

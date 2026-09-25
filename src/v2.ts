@@ -79,7 +79,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
   return {
     id: pluginID,
     setup: async (context) => {
-      const configuration = parsePluginConfiguration(context.options);
+      const configuration = parsePluginConfiguration({ options: context.options });
       const reviewer = dependencies.createReviewer({
         client: createV2SessionClient(context),
         configuration,
@@ -87,23 +87,27 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       const intents = new Map<string, string>();
 
       // `update` on an unknown ID registers a new agent; the branded ID/Name
-      // types are plain strings at runtime.
-      await context.agent.transform((editor) => {
-        editor.update(reviewerAgentName as unknown as Agent.ID, (agent) => {
-          agent.name = reviewerAgentName as unknown as Agent.Name;
-          agent.description = reviewerAgentDescription;
-          agent.system = reviewerAgentPrompt;
-          agent.mode = "subagent";
-          agent.hidden = true;
-          agent.permissions = [...reviewerPermissions];
+      // types are plain strings at runtime. The Jev backend needs no agent.
+      if (configuration.reviewer.backend === "opencode") {
+        await context.agent.transform((editor) => {
+          editor.update(reviewerAgentName as unknown as Agent.ID, (agent) => {
+            agent.name = reviewerAgentName as unknown as Agent.Name;
+            agent.description = reviewerAgentDescription;
+            agent.system = reviewerAgentPrompt;
+            agent.mode = "subagent";
+            agent.hidden = true;
+            agent.permissions = [...reviewerPermissions];
+          });
         });
-      });
+      }
 
       // Both the session ID and the agent name identify the reviewer: the ID
       // is forgotten the moment a review ends, while an interrupted reviewer
-      // session may still be winding down under its agent.
+      // session may still be winding down under its agent. The name only
+      // counts when this plugin defined that agent as read-only; under Jev an
+      // agent of that name is someone else's and must be reviewed.
       const isReviewer = (event: { sessionID: string; agent?: string }): boolean =>
-        event.agent === reviewerAgentName ||
+        (configuration.reviewer.backend === "opencode" && event.agent === reviewerAgentName) ||
         reviewer.isReviewerSession({ sessionID: event.sessionID });
 
       await context.session.hook("prompt", (event) => {
@@ -112,6 +116,8 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       });
 
       const sessionModel = async (sessionID: string): Promise<ModelReference | undefined> => {
+        // Only the opencode backend reviews with the session's model.
+        if (configuration.reviewer.backend !== "opencode") return undefined;
         try {
           const session = await context.session.get({ sessionID });
           return fromModelRef(session.model);
