@@ -114,6 +114,8 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       });
 
       const sessionModel = async (sessionID: string): Promise<ModelReference | undefined> => {
+        // Only the opencode backend reviews with the session's model.
+        if (configuration.reviewer.backend !== "opencode") return undefined;
         try {
           const session = await context.session.get({ sessionID });
           return fromModelRef(session.model);

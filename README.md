@@ -153,7 +153,9 @@ inspected, and a review typically answers in well under a second.
 
 - Plugin options take precedence over the environment. Prefer the `TYPESAFE_API_KEY` environment
   variable: `opencode.json` is often committed, and a key written there is shared with it.
-- The plugin fails at startup when the `jev` backend has no API key or an invalid base URL.
+- The plugin fails at startup when the `jev` backend has no API key or an invalid base URL. The
+  variable is read by the process that loads the plugin: if OpenCode 2.x's background service was
+  already running, run `opencode service restart` after exporting it.
 - Jev returns a choice with calibrated probabilities rather than an explanation, so the verdict
   reason reads like `Jev chose deny (allow 0.00, deny 0.99, escalate 0.01).` A hesitant `allow`
   below `minAllowProbability` is escalated to a human; `deny` and `escalate` are taken as answered.
@@ -162,7 +164,7 @@ inspected, and a review typically answers in well under a second.
 - Redirects are refused so the API key is never forwarded to another host, and the timeout covers
   the whole request including the response body. HTTP errors (`402` out of credit, `429` rate
   limited, `5xx` outage) are reported by status only and handled like any other reviewer failure.
-- `reviewer.model` has no effect with the `jev` backend. `jev-latest` follows new model releases,
+- `reviewer.model` has no effect with the `jev` backend, and `reviewer.jev` none with `opencode`. `jev-latest` follows new model releases,
   which may shift verdicts; pin a version for stable behavior.
 
 ### Review modes
