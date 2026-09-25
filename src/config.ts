@@ -110,7 +110,7 @@ function jevConfiguration(input: {
   }
   const source =
     optionKey === undefined
-      ? { apiKey: envKey, baseURL: nonEmpty(input.env.TYPESAFE_BASE_URL) }
+      ? { apiKey: envKey, baseURL: nonEmpty(input.env.TYPESAFE_BASE_URL?.trim()) }
       : { apiKey: optionKey, baseURL: input.options?.baseURL };
   const apiKey = source.apiKey;
   if (apiKey === undefined) {

@@ -166,12 +166,15 @@ inspected, and a review typically answers in well under a second.
 - The operation leaves your machine: the resource holds the full command, file content of a
   write or edit, and permission metadata such as diffs, and the user intent is your latest prompt.
   All of it is sent to TypeSafe AI (or `baseURL`), so an edit of a secrets file sends those secrets.
-- A resource larger than 32,000 characters of JSON (for example a large file write) is sent as a
-  truncated preview, and a prompt longer than 4,000 characters is cut; an `allow` for either is
-  escalated, because Jev saw only part of it.
+- A resource larger than 64,000 characters of JSON (for example a large file write) is sent as a
+  truncated preview, and a prompt longer than 16,000 characters is cut; an `allow` for either is
+  escalated, because Jev saw only part of it. With `on-ask` that leaves OpenCode's permission prompt;
+  with `all-tools` such a tool call is always blocked, and retrying the same call does not help —
+  split the write or switch to `on-ask`.
 - `baseURL` must use HTTPS unless it points at `localhost`. Whoever serves it receives the API key
   and decides every verdict, so set it only in configuration you trust (not a repository's
-  `opencode.json` you have not reviewed).
+  `opencode.json` you have not reviewed) — the same holds for `minAllowProbability`, which lowers
+  the bar for an automatic approval.
 - Redirects are refused so the API key is never forwarded to another host, and the timeout covers
   the whole request including the response body. HTTP errors (`402` out of credit, `429` rate
   limited, `5xx` outage) are reported by status only and handled like any other reviewer failure.
@@ -195,7 +198,8 @@ OpenCode's plugin API does not provide a way to create and await a new permissio
 `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict: the tool does
 not run and the user must explicitly retry after reviewing the reported reason.
 
-Both modes work the same way with either reviewer backend.
+Both modes work the same way with either reviewer backend, except that the Jev backend always
+escalates an operation too large to send in full (see above).
 
 Explicit OpenCode `deny` rules always remain in effect. The plugin is an additional review layer;
 it never turns a built-in deny into an allow.

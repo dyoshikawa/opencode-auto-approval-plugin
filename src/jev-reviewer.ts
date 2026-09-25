@@ -16,12 +16,13 @@ const verdicts = ["allow", "deny", "escalate"] as const;
 
 /**
  * The API refuses a state beyond its token limit (a 200 KB edit answered
- * `max_tokens_exceeded`), and a large state is billed in full, so the resource
- * is cut to a preview. Measured at roughly 2.5 characters per token.
+ * `max_tokens_exceeded`; 80,000 characters of state were accepted as 32k
+ * tokens), and a large state is billed in full, so the resource and the
+ * intent are cut to a preview.
  */
-const MAX_RESOURCE_CHARS = 32_000;
+const MAX_RESOURCE_CHARS = 64_000;
 
-const MAX_INTENT_CHARS = 4_000;
+const MAX_INTENT_CHARS = 16_000;
 
 // The policy lives in `instructions`: Jev follows guidance there, while text in
 // the state is data it judges.
@@ -174,7 +175,9 @@ function reviewState(input: ReviewRequest): {
   truncated: boolean;
 } {
   const resource = boundedResource(input.resource);
-  const intent = input.userIntent === undefined ? undefined : boundedText(input.userIntent);
+  // An empty prompt (an attachment only) is no stated intent.
+  const text = input.userIntent?.trim();
+  const intent = text ? boundedText(text) : undefined;
   return {
     state: {
       source: input.source,

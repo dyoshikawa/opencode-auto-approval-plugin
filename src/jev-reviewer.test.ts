@@ -109,13 +109,18 @@ describe("JevReviewer", () => {
     await expect(reviewer.review(request)).resolves.toMatchObject({ verdict: "allow" });
   });
 
-  it("sends a null intent when the user said nothing", async () => {
-    const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "deny" }) });
+  it.each([undefined, "", "  \n"])(
+    "sends a null intent when the user said nothing (%j)",
+    async (userIntent) => {
+      const { reviewer, fetch } = reviewerWith({
+        response: async () => answer({ choice: "deny" }),
+      });
 
-    await reviewer.review({ ...request, userIntent: undefined });
+      await reviewer.review({ ...request, userIntent });
 
-    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state.userIntent).toBeNull();
-  });
+      expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state.userIntent).toBeNull();
+    },
+  );
 
   it("cuts an oversized resource to a preview and never allows it", async () => {
     const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "allow" }) });
@@ -123,22 +128,22 @@ describe("JevReviewer", () => {
     const verdict = await reviewer.review({
       ...request,
       action: "edit",
-      resource: { filePath: "a.ts", content: "x".repeat(100_000) },
+      resource: { filePath: "a.ts", content: "x".repeat(200_000) },
     });
 
     const state = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state;
     expect(state.resource).toMatchObject({ truncated: true });
-    expect(state.resource.preview).toHaveLength(32_000);
+    expect(state.resource.preview).toHaveLength(64_000);
     expect(verdict.verdict).toBe("escalate");
   });
 
   it("never allows when the user's request had to be cut", async () => {
     const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "allow" }) });
 
-    const verdict = await reviewer.review({ ...request, userIntent: "y".repeat(5_000) });
+    const verdict = await reviewer.review({ ...request, userIntent: "y".repeat(20_000) });
 
     const state = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state;
-    expect(state.userIntent).toHaveLength(4_001);
+    expect(state.userIntent).toHaveLength(16_001);
     expect(verdict.verdict).toBe("escalate");
   });
 
@@ -166,7 +171,7 @@ describe("JevReviewer", () => {
     const { reviewer } = reviewerWith({ response: async () => answer({ choice: "deny" }) });
 
     await expect(
-      reviewer.review({ ...request, resource: { content: "x".repeat(100_000) } }),
+      reviewer.review({ ...request, resource: { content: "x".repeat(200_000) } }),
     ).resolves.toMatchObject({ verdict: "deny" });
   });
 

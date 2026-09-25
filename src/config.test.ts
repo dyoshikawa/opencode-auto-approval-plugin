@@ -116,6 +116,31 @@ describe("parsePluginConfiguration", () => {
       ).toBe("env-key");
     });
 
+    it.each(["http://localhost:8787", "http://127.0.0.1:8787", "http://[::1]:8787"])(
+      "allows plain HTTP to the loopback origin %s",
+      (baseURL) => {
+        expect(
+          parsePluginConfiguration({ options: jevOptions({ apiKey: "key", baseURL }), env: {} })
+            .reviewer.jev?.endpoint,
+        ).toBe(`${baseURL}/v1/systemone`);
+      },
+    );
+
+    it("treats a blank option key as absent", () => {
+      expect(
+        parsePluginConfiguration({
+          options: jevOptions({ apiKey: "  " }),
+          env: { TYPESAFE_API_KEY: "env-key", TYPESAFE_BASE_URL: " " },
+        }).reviewer.jev,
+      ).toMatchObject({ apiKey: "env-key", endpoint: "https://api.typesafe.ai/v1/systemone" });
+      expect(() =>
+        parsePluginConfiguration({
+          options: jevOptions({ apiKey: "  ", baseURL: "https://attacker.example" }),
+          env: { TYPESAFE_API_KEY: "env-key" },
+        }),
+      ).toThrow("reviewer.jev.baseURL needs reviewer.jev.apiKey");
+    });
+
     it("fails fast without an API key", () => {
       expect(() =>
         parsePluginConfiguration({ options: jevOptions(), env: { TYPESAFE_API_KEY: "  " } }),
