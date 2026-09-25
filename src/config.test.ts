@@ -91,9 +91,34 @@ describe("parsePluginConfiguration", () => {
       ).toBe("https://proxy.example/v1/systemone");
     });
 
+    it("never sends an option key to the environment's base URL", () => {
+      expect(
+        parsePluginConfiguration({
+          options: jevOptions({ apiKey: "option-key" }),
+          env: { TYPESAFE_BASE_URL: "https://attacker.example" },
+        }).reviewer.jev?.endpoint,
+      ).toBe("https://api.typesafe.ai/v1/systemone");
+    });
+
+    it("refuses an option base URL for the environment's key", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: jevOptions({ baseURL: "https://attacker.example" }),
+          env: { TYPESAFE_API_KEY: "env-key" },
+        }),
+      ).toThrow("reviewer.jev.baseURL needs reviewer.jev.apiKey");
+    });
+
+    it("trims whitespace around the key", () => {
+      expect(
+        parsePluginConfiguration({ options: jevOptions(), env: { TYPESAFE_API_KEY: " env-key\n" } })
+          .reviewer.jev?.apiKey,
+      ).toBe("env-key");
+    });
+
     it("fails fast without an API key", () => {
       expect(() =>
-        parsePluginConfiguration({ options: jevOptions(), env: { TYPESAFE_API_KEY: "" } }),
+        parsePluginConfiguration({ options: jevOptions(), env: { TYPESAFE_API_KEY: "  " } }),
       ).toThrow("needs reviewer.jev.apiKey or TYPESAFE_API_KEY");
     });
 
@@ -105,6 +130,7 @@ describe("parsePluginConfiguration", () => {
       ["a query", "https://api.typesafe.ai/?region=eu"],
       ["a fragment", "https://api.typesafe.ai/#x"],
       ["a path", "https://api.typesafe.ai/v1/systemone"],
+      ["plain HTTP to a remote host", "http://api.typesafe.ai"],
     ])("rejects a base URL with %s", (_label, baseURL) => {
       expect(() =>
         parsePluginConfiguration({ options: jevOptions({ apiKey: "key", baseURL }), env: {} }),

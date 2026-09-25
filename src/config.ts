@@ -40,13 +40,15 @@ const defaultJevModel = "jev-latest";
 
 const defaultMinAllowProbability = 0.6;
 
+const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
 const modelReferenceSchema = z.object({
   providerID: z.string(),
   modelID: z.string(),
 });
 
 const jevConfigurationSchema = z.object({
-  apiKey: z.optional(z.string().check(z.minLength(1))),
+  apiKey: z.optional(z.string()),
   baseURL: z.optional(z.string()),
   model: z.optional(z.string().check(z.minLength(1))),
   minAllowProbability: z.optional(z.number().check(z.gte(0), z.lte(1))),
@@ -96,15 +98,27 @@ function jevConfiguration(input: {
   options: z.infer<typeof jevConfigurationSchema> | undefined;
   env: Environment;
 }): JevConfiguration {
-  const apiKey = input.options?.apiKey ?? nonEmpty(input.env.TYPESAFE_API_KEY);
+  // The key and the base URL must come from the same place: whoever serves
+  // the base URL receives the key and decides every verdict, so one source
+  // must not be able to redirect a key supplied by another.
+  const optionKey = nonEmpty(input.options?.apiKey?.trim());
+  const envKey = nonEmpty(input.env.TYPESAFE_API_KEY?.trim());
+  if (optionKey === undefined && input.options?.baseURL !== undefined) {
+    throw new Error(
+      "Invalid auto-approval plugin options: reviewer.jev.baseURL needs reviewer.jev.apiKey next to it; with TYPESAFE_API_KEY use TYPESAFE_BASE_URL.",
+    );
+  }
+  const source =
+    optionKey === undefined
+      ? { apiKey: envKey, baseURL: nonEmpty(input.env.TYPESAFE_BASE_URL) }
+      : { apiKey: optionKey, baseURL: input.options?.baseURL };
+  const apiKey = source.apiKey;
   if (apiKey === undefined) {
     throw new Error(
       "Invalid auto-approval plugin options: the jev reviewer backend needs reviewer.jev.apiKey or TYPESAFE_API_KEY.",
     );
   }
-
-  const baseURL =
-    input.options?.baseURL ?? nonEmpty(input.env.TYPESAFE_BASE_URL) ?? defaultJevBaseURL;
+  const baseURL = source.baseURL ?? defaultJevBaseURL;
   return {
     apiKey,
     endpoint: jevEndpoint(baseURL),
@@ -127,6 +141,12 @@ function jevEndpoint(baseURL: string): string {
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw new Error("Invalid auto-approval plugin options: the Jev base URL must use HTTP(S).");
+  }
+  // The bearer token must not cross the network in the clear.
+  if (url.protocol === "http:" && !loopbackHosts.has(url.hostname)) {
+    throw new Error(
+      "Invalid auto-approval plugin options: the Jev base URL must use HTTPS except on localhost.",
+    );
   }
   if (url.username || url.password || url.search || url.hash || url.pathname !== "/") {
     throw new Error(

@@ -182,6 +182,23 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(isReviewerSession).toHaveBeenCalledWith({ sessionID: "review-session" });
   });
 
+  it("reviews an agent that merely shares the reviewer's name under the jev backend", async () => {
+    const { context, hooks } = createContext({
+      options: { reviewer: { backend: "jev", jev: { apiKey: "test-key" } } },
+    });
+    const { plugin, review } = createPlugin({ verdict: "deny" });
+    await plugin.setup(context as never);
+
+    await hooks["permission.evaluate"]?.(
+      askEvent({ sessionID: "session-1", agent: "auto-approval-reviewer" }),
+    );
+
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ model: undefined }));
+    // Jev does not review with the session's model, so it is not looked up.
+    expect(context.session.get).not.toHaveBeenCalled();
+  });
+
   it("reviews without a model when the session lookup fails", async () => {
     const { context, hooks, session } = createContext();
     session.get.mockRejectedValueOnce(new Error("gone"));

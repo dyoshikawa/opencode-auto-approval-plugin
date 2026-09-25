@@ -79,12 +79,12 @@ export class JevReviewer implements Reviewer {
     const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
     try {
       // The timeout covers the body as well as the headers.
-      const state = reviewState(input);
+      const { state, truncated } = reviewState(input);
       const body = await Promise.race([
         this.#request({ state, signal: controller.signal }),
         timedOut,
       ]);
-      return this.#verdict({ answer: body, truncated: isTruncated(state.resource) });
+      return this.#verdict({ answer: body, truncated });
     } catch (error) {
       if (controller.signal.aborted) throw new Error("Reviewer timed out.", { cause: error });
       throw error;
@@ -137,9 +137,11 @@ export class JevReviewer implements Reviewer {
     const answer = result.data.answers.verdict;
     const probabilities = answer.probabilities ?? {};
     const probability = probabilities[answer.choice] ?? answer.confidence ?? 0;
-    const summary = verdicts
-      .map((verdict) => `${verdict} ${(probabilities[verdict] ?? 0).toFixed(2)}`)
-      .join(", ");
+    const summary = answer.probabilities
+      ? verdicts
+          .map((verdict) => `${verdict} ${(probabilities[verdict] ?? 0).toFixed(2)}`)
+          .join(", ")
+      : `confidence ${probability.toFixed(2)}`;
 
     // Jev always picks an option; a hesitant allow is not an approval.
     const threshold = this.#configuration.minAllowProbability;
@@ -155,7 +157,7 @@ export class JevReviewer implements Reviewer {
       return {
         verdict: "escalate",
         reason: sanitizeReason(
-          `Jev chose allow but saw only part of an oversized operation (${summary}).`,
+          `Jev chose allow but saw only part of an oversized operation or request (${summary}).`,
         ),
       };
     }
@@ -166,29 +168,39 @@ export class JevReviewer implements Reviewer {
   }
 }
 
-function reviewState(input: ReviewRequest): Record<string, unknown> {
+/** The state sent to Jev, and whether any of it had to be cut to fit. */
+function reviewState(input: ReviewRequest): {
+  state: Record<string, unknown>;
+  truncated: boolean;
+} {
+  const resource = boundedResource(input.resource);
+  const intent = input.userIntent === undefined ? undefined : boundedText(input.userIntent);
   return {
-    source: input.source,
-    action: input.action,
-    resource: boundedResource(input.resource),
-    userIntent: input.userIntent === undefined ? null : boundedText(input.userIntent),
+    state: {
+      source: input.source,
+      action: input.action,
+      resource: resource.value,
+      userIntent: intent?.value ?? null,
+    },
+    truncated: resource.truncated || (intent?.truncated ?? false),
   };
 }
 
-function boundedResource(input: unknown): unknown {
+function boundedResource(input: unknown): { value: unknown; truncated: boolean } {
   const serialized = JSON.stringify(input) ?? "null";
-  if (serialized.length <= MAX_RESOURCE_CHARS) return input ?? null;
+  if (serialized.length <= MAX_RESOURCE_CHARS) return { value: input ?? null, truncated: false };
   return {
+    value: {
+      truncated: true,
+      originalLength: serialized.length,
+      preview: serialized.slice(0, MAX_RESOURCE_CHARS),
+    },
     truncated: true,
-    originalLength: serialized.length,
-    preview: serialized.slice(0, MAX_RESOURCE_CHARS),
   };
 }
 
-function isTruncated(input: unknown): boolean {
-  return typeof input === "object" && input !== null && "truncated" in input;
-}
-
-function boundedText(input: string): string {
-  return input.length <= MAX_INTENT_CHARS ? input : `${input.slice(0, MAX_INTENT_CHARS)}…`;
+function boundedText(input: string): { value: string; truncated: boolean } {
+  return input.length <= MAX_INTENT_CHARS
+    ? { value: input, truncated: false }
+    : { value: `${input.slice(0, MAX_INTENT_CHARS)}…`, truncated: true };
 }

@@ -143,24 +143,35 @@ inspected, and a review typically answers in well under a second.
 }
 ```
 
-| Option                             | Environment fallback | Default                   | Description                                                     |
+| Option                             | Environment variable | Default                   | Description                                                     |
 | ---------------------------------- | -------------------- | ------------------------- | --------------------------------------------------------------- |
 | `reviewer.backend`                 | —                    | `"opencode"`              | `"opencode"` (reviewer session) or `"jev"`                      |
 | `reviewer.jev.apiKey`              | `TYPESAFE_API_KEY`   | — (required for `jev`)    | TypeSafe AI API key                                             |
-| `reviewer.jev.baseURL`             | `TYPESAFE_BASE_URL`  | `https://api.typesafe.ai` | API origin; must be a bare HTTP(S) origin without a path        |
+| `reviewer.jev.baseURL`             | `TYPESAFE_BASE_URL`  | `https://api.typesafe.ai` | API origin; a bare HTTPS origin (HTTP only for localhost)       |
 | `reviewer.jev.model`               | —                    | `"jev-latest"`            | Jev model or alias; pin a version such as `jev-1.13.0`          |
 | `reviewer.jev.minAllowProbability` | —                    | `0.6`                     | An `allow` answered with a lower probability becomes `escalate` |
 
-- Plugin options take precedence over the environment. Prefer the `TYPESAFE_API_KEY` environment
-  variable: `opencode.json` is often committed, and a key written there is shared with it.
+- The key and the base URL come from the same place. With `reviewer.jev.apiKey`, only
+  `reviewer.jev.baseURL` applies (`TYPESAFE_BASE_URL` is ignored); with `TYPESAFE_API_KEY`, only
+  `TYPESAFE_BASE_URL` applies, and setting `reviewer.jev.baseURL` without a key next to it fails at
+  startup. This keeps one source from redirecting a key supplied by another.
+- Prefer the `TYPESAFE_API_KEY` environment variable: `opencode.json` is often committed, and a key
+  written there is shared with it. Surrounding whitespace in the key is trimmed.
 - The plugin fails at startup when the `jev` backend has no API key or an invalid base URL. The
   variable is read by the process that loads the plugin: if OpenCode 2.x's background service was
   already running, run `opencode service restart` after exporting it.
 - Jev returns a choice with calibrated probabilities rather than an explanation, so the verdict
   reason reads like `Jev chose deny (allow 0.00, deny 0.99, escalate 0.01).` A hesitant `allow`
   below `minAllowProbability` is escalated to a human; `deny` and `escalate` are taken as answered.
+- The operation leaves your machine: the resource holds the full command, file content of a
+  write or edit, and permission metadata such as diffs, and the user intent is your latest prompt.
+  All of it is sent to TypeSafe AI (or `baseURL`), so an edit of a secrets file sends those secrets.
 - A resource larger than 32,000 characters of JSON (for example a large file write) is sent as a
-  truncated preview, and an `allow` for it is escalated, because Jev saw only part of it.
+  truncated preview, and a prompt longer than 4,000 characters is cut; an `allow` for either is
+  escalated, because Jev saw only part of it.
+- `baseURL` must use HTTPS unless it points at `localhost`. Whoever serves it receives the API key
+  and decides every verdict, so set it only in configuration you trust (not a repository's
+  `opencode.json` you have not reviewed).
 - Redirects are refused so the API key is never forwarded to another host, and the timeout covers
   the whole request including the response body. HTTP errors (`402` out of credit, `429` rate
   limited, `5xx` outage) are reported by status only and handled like any other reviewer failure.

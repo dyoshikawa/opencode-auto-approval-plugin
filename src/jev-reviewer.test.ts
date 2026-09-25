@@ -132,6 +132,44 @@ describe("JevReviewer", () => {
     expect(verdict.verdict).toBe("escalate");
   });
 
+  it("never allows when the user's request had to be cut", async () => {
+    const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "allow" }) });
+
+    const verdict = await reviewer.review({ ...request, userIntent: "y".repeat(5_000) });
+
+    const state = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state;
+    expect(state.userIntent).toHaveLength(4_001);
+    expect(verdict.verdict).toBe("escalate");
+  });
+
+  it("does not mistake a resource's own truncated field for a cut", async () => {
+    const { reviewer } = reviewerWith({ response: async () => answer({ choice: "allow" }) });
+
+    await expect(
+      reviewer.review({ ...request, resource: { truncated: false, command: "ls" } }),
+    ).resolves.toMatchObject({ verdict: "allow" });
+  });
+
+  it("falls back to the confidence when no probabilities are given", async () => {
+    const { reviewer } = reviewerWith({
+      response: async () =>
+        Response.json({ answers: { verdict: { choice: "allow", confidence: 0.5 } } }),
+    });
+
+    await expect(reviewer.review(request)).resolves.toEqual({
+      verdict: "escalate",
+      reason: "Jev leaned allow at 0.50, below the 0.60 threshold (confidence 0.50).",
+    });
+  });
+
+  it("keeps a deny for an oversized resource", async () => {
+    const { reviewer } = reviewerWith({ response: async () => answer({ choice: "deny" }) });
+
+    await expect(
+      reviewer.review({ ...request, resource: { content: "x".repeat(100_000) } }),
+    ).resolves.toMatchObject({ verdict: "deny" });
+  });
+
   it("reports the HTTP status without the response body", async () => {
     const { reviewer } = reviewerWith({
       response: async () => new Response("secret detail", { status: 402 }),

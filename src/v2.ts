@@ -103,9 +103,11 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
 
       // Both the session ID and the agent name identify the reviewer: the ID
       // is forgotten the moment a review ends, while an interrupted reviewer
-      // session may still be winding down under its agent.
+      // session may still be winding down under its agent. The name only
+      // counts when this plugin defined that agent as read-only; under Jev an
+      // agent of that name is someone else's and must be reviewed.
       const isReviewer = (event: { sessionID: string; agent?: string }): boolean =>
-        event.agent === reviewerAgentName ||
+        (configuration.reviewer.backend === "opencode" && event.agent === reviewerAgentName) ||
         reviewer.isReviewerSession({ sessionID: event.sessionID });
 
       await context.session.hook("prompt", (event) => {
