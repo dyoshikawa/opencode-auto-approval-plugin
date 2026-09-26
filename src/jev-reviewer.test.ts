@@ -133,7 +133,8 @@ describe("JevReviewer", () => {
 
     const state = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state;
     expect(state.resource).toMatchObject({ truncated: true });
-    expect(state.resource.preview).toHaveLength(64_000);
+    expect(JSON.stringify(state.resource.preview).length).toBeLessThanOrEqual(64_000);
+    expect(JSON.stringify(state.resource.preview).length).toBeGreaterThan(63_900);
     expect(verdict.verdict).toBe("escalate");
   });
 
@@ -143,7 +144,7 @@ describe("JevReviewer", () => {
     const verdict = await reviewer.review({ ...request, userIntent: "y".repeat(20_000) });
 
     const state = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state;
-    expect(state.userIntent).toHaveLength(16_001);
+    expect(state.userIntent).toHaveLength(15_999);
     expect(verdict.verdict).toBe("escalate");
   });
 
@@ -173,6 +174,38 @@ describe("JevReviewer", () => {
     await expect(
       reviewer.review({ ...request, resource: { content: "x".repeat(200_000) } }),
     ).resolves.toMatchObject({ verdict: "deny" });
+  });
+
+  it("bounds the preview by its escaped size", async () => {
+    const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "deny" }) });
+
+    await reviewer.review({ ...request, resource: { content: 'say "hi"\\n'.repeat(20_000) } });
+
+    const { preview } = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state.resource;
+    expect(JSON.stringify(preview).length).toBeLessThanOrEqual(64_000);
+  });
+
+  it("never ends a cut intent on half a surrogate pair", async () => {
+    const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "deny" }) });
+
+    await reviewer.review({ ...request, userIntent: `"${"😀".repeat(10_000)}` });
+
+    const intent: string = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state.userIntent;
+    expect(intent.endsWith("😀…")).toBe(true);
+  });
+
+  it("reads a missing probability as zero rather than the confidence", async () => {
+    const { reviewer } = reviewerWith({
+      response: async () =>
+        Response.json({
+          answers: { verdict: { choice: "allow", confidence: 0.9, probabilities: { deny: 0.1 } } },
+        }),
+    });
+
+    await expect(reviewer.review(request)).resolves.toMatchObject({
+      verdict: "escalate",
+      reason: expect.stringContaining("leaned allow at 0.00"),
+    });
   });
 
   it("reports the HTTP status without the response body", async () => {

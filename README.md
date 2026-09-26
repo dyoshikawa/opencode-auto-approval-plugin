@@ -147,7 +147,7 @@ inspected, and a review typically answers in well under a second.
 | ---------------------------------- | -------------------- | ------------------------- | --------------------------------------------------------------- |
 | `reviewer.backend`                 | —                    | `"opencode"`              | `"opencode"` (reviewer session) or `"jev"`                      |
 | `reviewer.jev.apiKey`              | `TYPESAFE_API_KEY`   | — (required for `jev`)    | TypeSafe AI API key                                             |
-| `reviewer.jev.baseURL`             | `TYPESAFE_BASE_URL`  | `https://api.typesafe.ai` | API origin; a bare HTTPS origin (HTTP only for localhost)       |
+| `reviewer.jev.baseURL`             | `TYPESAFE_BASE_URL`  | `https://api.typesafe.ai` | API origin; a bare HTTPS origin (HTTP only for loopback)        |
 | `reviewer.jev.model`               | —                    | `"jev-latest"`            | Jev model or alias; pin a version such as `jev-1.13.0`          |
 | `reviewer.jev.minAllowProbability` | —                    | `0.6`                     | An `allow` answered with a lower probability becomes `escalate` |
 
@@ -166,12 +166,12 @@ inspected, and a review typically answers in well under a second.
 - The operation leaves your machine: the resource holds the full command, file content of a
   write or edit, and permission metadata such as diffs, and the user intent is your latest prompt.
   All of it is sent to TypeSafe AI (or `baseURL`), so an edit of a secrets file sends those secrets.
-- A resource larger than 64,000 characters of JSON (for example a large file write) is sent as a
+- A resource larger than 64,000 characters once encoded as JSON (for example a large file write) is sent as a
   truncated preview, and a prompt longer than 16,000 characters is cut; an `allow` for either is
   escalated, because Jev saw only part of it. With `on-ask` that leaves OpenCode's permission prompt;
   with `all-tools` such a tool call is always blocked, and retrying the same call does not help —
   split the write or switch to `on-ask`.
-- `baseURL` must use HTTPS unless it points at `localhost`. Whoever serves it receives the API key
+- `baseURL` must use HTTPS unless it points at a loopback host (`localhost`, `127.0.0.1`, `[::1]`). Whoever serves it receives the API key
   and decides every verdict, so set it only in configuration you trust (not a repository's
   `opencode.json` you have not reviewed) — the same holds for `minAllowProbability`, which lowers
   the bar for an automatic approval.

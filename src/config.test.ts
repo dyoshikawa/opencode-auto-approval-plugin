@@ -141,6 +141,19 @@ describe("parsePluginConfiguration", () => {
       ).toThrow("reviewer.jev.baseURL needs reviewer.jev.apiKey");
     });
 
+    it("treats a blank base URL option as unset", () => {
+      expect(
+        parsePluginConfiguration({ options: jevOptions({ apiKey: "key", baseURL: " " }), env: {} })
+          .reviewer.jev?.endpoint,
+      ).toBe("https://api.typesafe.ai/v1/systemone");
+      expect(
+        parsePluginConfiguration({
+          options: jevOptions({ baseURL: "" }),
+          env: { TYPESAFE_API_KEY: "env-key" },
+        }).reviewer.jev?.apiKey,
+      ).toBe("env-key");
+    });
+
     it("fails fast without an API key", () => {
       expect(() =>
         parsePluginConfiguration({ options: jevOptions(), env: { TYPESAFE_API_KEY: "  " } }),
