@@ -103,7 +103,8 @@ function jevConfiguration(input: {
   // must not be able to redirect a key supplied by another.
   const optionKey = nonEmpty(input.options?.apiKey?.trim());
   const envKey = nonEmpty(input.env.TYPESAFE_API_KEY?.trim());
-  if (optionKey === undefined && input.options?.baseURL !== undefined) {
+  const optionBaseURL = nonEmpty(input.options?.baseURL?.trim());
+  if (optionKey === undefined && optionBaseURL !== undefined) {
     throw new Error(
       "Invalid auto-approval plugin options: reviewer.jev.baseURL needs reviewer.jev.apiKey next to it; with TYPESAFE_API_KEY use TYPESAFE_BASE_URL.",
     );
@@ -111,7 +112,7 @@ function jevConfiguration(input: {
   const source =
     optionKey === undefined
       ? { apiKey: envKey, baseURL: nonEmpty(input.env.TYPESAFE_BASE_URL?.trim()) }
-      : { apiKey: optionKey, baseURL: input.options?.baseURL };
+      : { apiKey: optionKey, baseURL: optionBaseURL };
   const apiKey = source.apiKey;
   if (apiKey === undefined) {
     throw new Error(
@@ -145,7 +146,7 @@ function jevEndpoint(baseURL: string): string {
   // The bearer token must not cross the network in the clear.
   if (url.protocol === "http:" && !loopbackHosts.has(url.hostname)) {
     throw new Error(
-      "Invalid auto-approval plugin options: the Jev base URL must use HTTPS except on localhost.",
+      "Invalid auto-approval plugin options: the Jev base URL must use HTTPS except on a loopback host.",
     );
   }
   if (url.username || url.password || url.search || url.hash || url.pathname !== "/") {

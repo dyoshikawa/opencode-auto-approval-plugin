@@ -18,7 +18,8 @@ const verdicts = ["allow", "deny", "escalate"] as const;
  * The API refuses a state beyond its token limit (a 200 KB edit answered
  * `max_tokens_exceeded`; 80,000 characters of state were accepted as 32k
  * tokens), and a large state is billed in full, so the resource and the
- * intent are cut to a preview.
+ * intent are cut to a preview. Both limits count characters as encoded in the
+ * request body.
  */
 const MAX_RESOURCE_CHARS = 64_000;
 
@@ -137,7 +138,10 @@ export class JevReviewer implements Reviewer {
 
     const answer = result.data.answers.verdict;
     const probabilities = answer.probabilities ?? {};
-    const probability = probabilities[answer.choice] ?? answer.confidence ?? 0;
+    // The probability shown in the summary is the one the threshold reads.
+    const probability = answer.probabilities
+      ? (probabilities[answer.choice] ?? 0)
+      : (answer.confidence ?? 0);
     const summary = answer.probabilities
       ? verdicts
           .map((verdict) => `${verdict} ${(probabilities[verdict] ?? 0).toFixed(2)}`)
@@ -196,14 +200,32 @@ function boundedResource(input: unknown): { value: unknown; truncated: boolean }
     value: {
       truncated: true,
       originalLength: serialized.length,
-      preview: serialized.slice(0, MAX_RESOURCE_CHARS),
+      preview: cutToEncodedLength({ text: serialized, max: MAX_RESOURCE_CHARS }),
     },
     truncated: true,
   };
 }
 
 function boundedText(input: string): { value: string; truncated: boolean } {
-  return input.length <= MAX_INTENT_CHARS
+  return JSON.stringify(input).length <= MAX_INTENT_CHARS
     ? { value: input, truncated: false }
-    : { value: `${input.slice(0, MAX_INTENT_CHARS)}…`, truncated: true };
+    : { value: `${cutToEncodedLength({ text: input, max: MAX_INTENT_CHARS })}…`, truncated: true };
+}
+
+/**
+ * Cuts `text` so that it stays within `max` characters once it is encoded as a
+ * JSON string in the request body: quotes, backslashes and control characters
+ * grow when escaped, and a preview of serialized JSON is escaped twice.
+ */
+function cutToEncodedLength(input: { text: string; max: number }): string {
+  let text = input.text.slice(0, input.max);
+  let excess = JSON.stringify(text).length - input.max;
+  while (excess > 0) {
+    // Every character costs at least one encoded character, so cutting the
+    // excess always converges.
+    text = text.slice(0, text.length - excess);
+    excess = JSON.stringify(text).length - input.max;
+  }
+  // Never end on the first half of a surrogate pair.
+  return /[\uD800-\uDBFF]$/.test(text) ? text.slice(0, -1) : text;
 }
