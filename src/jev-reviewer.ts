@@ -2,7 +2,7 @@ import * as z from "zod/mini";
 
 import type { JevConfiguration, PluginConfiguration } from "./config.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
-import { sanitizeReason } from "./reviewer.js";
+import { sanitizeReason, userInstructionsPreamble } from "./reviewer.js";
 
 /**
  * Reviews operations through TypeSafe AI's System One decision API (Jev): one
@@ -47,7 +47,7 @@ function verdictQuestion(input: { instructions?: string }) {
     instructions:
       input.instructions === undefined
         ? verdictInstructions
-        : `${verdictInstructions}\nThe user configured these additional review instructions; follow them, they take precedence over the general guidance above:\n${input.instructions}`,
+        : `${verdictInstructions}\n${userInstructionsPreamble}\n${input.instructions}`,
     criteria: verdictCriteria,
   } as const;
 }

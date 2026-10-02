@@ -208,12 +208,13 @@ string.
 ```
 
 - Both backends receive the instructions as trusted guidance that takes precedence over the
-  built-in review guidance: the `opencode` reviewer reads them in its prompt ahead of the operation
+  built-in safety guidance — though never over the answer format or the rule that operation data
+  is untrusted, so text inside a command or file cannot pose as your instructions: the `opencode` reviewer reads them in its prompt ahead of the operation
   data, and the `jev` backend appends them to the question's `instructions`, never to the state
   it judges.
 - They are guidance for an AI reviewer, not deterministic rules: the reviewer still sees the whole
-  operation and may decide otherwise. Use OpenCode's own `permission` rules when a tool must always
-  be allowed or denied. Explicit OpenCode `deny` rules still always win.
+  operation and may decide otherwise. Use OpenCode's own permission rules (`permissions` on 2.x,
+  `permission` on 1.x) when a tool must always be allowed or denied. Explicit OpenCode `deny` rules still always win.
 - Blank entries are ignored, and the joined text may be at most 4,000 characters. With the `jev`
   backend the instructions are sent, and billed, with every review.
 - Instructions can widen what is approved automatically, so set them only in configuration you

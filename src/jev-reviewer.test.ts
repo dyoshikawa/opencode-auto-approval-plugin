@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { parsePluginConfiguration } from "./config.js";
 import { JevReviewer } from "./jev-reviewer.js";
-import type { ReviewRequest } from "./reviewer.js";
+import { type ReviewRequest, userInstructionsPreamble } from "./reviewer.js";
 
 const request: ReviewRequest = {
   source: "permission-request",
@@ -65,8 +65,9 @@ describe("JevReviewer", () => {
 
     const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
     const instructions: string = body.questions.verdict.instructions;
-    expect(instructions).toContain("additional review instructions");
-    expect(instructions.endsWith("\n`pnpm test` is always safe.")).toBe(true);
+    expect(
+      instructions.endsWith(`\n${userInstructionsPreamble}\n\`pnpm test\` is always safe.`),
+    ).toBe(true);
     expect(JSON.stringify(body.state)).not.toContain("always safe");
   });
 
@@ -76,7 +77,7 @@ describe("JevReviewer", () => {
     await reviewer.review(request);
 
     const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
-    expect(body.questions.verdict.instructions).not.toContain("additional review instructions");
+    expect(body.questions.verdict.instructions).not.toContain(userInstructionsPreamble);
   });
 
   it("asks one Choice question over the operation state", async () => {

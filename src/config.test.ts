@@ -77,6 +77,15 @@ describe("parsePluginConfiguration", () => {
       ).toThrow("Invalid auto-approval plugin options");
     });
 
+    it("accepts instructions of exactly 4,000 characters, counting the line breaks", () => {
+      expect(
+        parsePluginConfiguration({
+          options: { reviewer: { instructions: ["x".repeat(1_999), "y".repeat(2_000)] } },
+          env: {},
+        }).reviewer.instructions,
+      ).toHaveLength(4_000);
+    });
+
     it("rejects instructions longer than 4,000 characters", () => {
       expect(() =>
         parsePluginConfiguration({

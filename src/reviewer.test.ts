@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { parsePluginConfiguration } from "./config.js";
-import { OpenCodeReviewer, type ReviewSessionClient } from "./reviewer.js";
+import {
+  OpenCodeReviewer,
+  type ReviewSessionClient,
+  userInstructionsPreamble,
+} from "./reviewer.js";
 
 type ReviewPrompt = Parameters<ReviewSessionClient["prompt"]>[0];
 type ReviewSessionOptions = Parameters<ReviewSessionClient["create"]>[0];
@@ -135,7 +139,7 @@ describe("Reviewer", () => {
 
     const prompt = client.prompts[0]?.text ?? "";
     const instructions = prompt.indexOf("`pnpm test` is always safe.");
-    expect(prompt).toContain("The user configured these additional review instructions.");
+    expect(prompt).toContain(userInstructionsPreamble);
     expect(instructions).toBeGreaterThan(-1);
     expect(instructions).toBeLessThan(prompt.indexOf("Return JSON only"));
     expect(instructions).toBeLessThan(prompt.search(/--- UNTRUSTED_OPERATION_[\da-f-]+ BEGIN ---/));
@@ -150,7 +154,7 @@ describe("Reviewer", () => {
 
     await reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} });
 
-    expect(client.prompts[0]?.text).not.toContain("additional review instructions");
+    expect(client.prompts[0]?.text).not.toContain(userInstructionsPreamble);
   });
 
   it("tracks the reviewer session only while the review is running", async () => {
