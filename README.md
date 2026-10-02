@@ -118,7 +118,7 @@ remains entirely in OpenCode.
 
 Set `reviewer.backend` to `"jev"` to have [TypeSafe AI](https://typesafe.ai/)'s Jev decision model
 judge each operation instead of an OpenCode session. The plugin sends one request to the System One
-API with the operation (`source`, `action`, `resource`, and the user's latest prompt) and a single
+API with the operation (`source`, `action`, `resource`, the user's latest prompt and bounded conversation) and a single
 `allow` / `deny` / `escalate` choice. No reviewer agent or session is created, the workspace is not
 inspected, and a review typically answers in well under a second.
 
@@ -221,6 +221,82 @@ string.
   trust, like `baseURL` and `minAllowProbability` — not in a repository's `opencode.json` you have
   not reviewed.
 
+### Audit log (opt-in)
+
+These options work with both plugin API generations and both reviewer backends. Add them to
+the plugin's `options` object (the second tuple item under `plugin` on OpenCode 1.x):
+
+```jsonc
+{
+  "auditLog": {
+    "enabled": true,
+    "path": "/absolute/private/directory/approval-audit.jsonl",
+    "includeCommand": false,
+  },
+  "conversation": {
+    "enabled": true,
+    "includeAssistant": false,
+  },
+}
+```
+
+- `auditLog.enabled` and `auditLog.includeCommand` both default to `false`. Disabled auditing
+  performs no log I/O. When enabled, `path` is required and must be an absolute filesystem path.
+  There is no environment variable, home-directory fallback, or project-relative resolution.
+  Choose a private directory outside version control; do not use a path controlled by an untrusted
+  project. Parent directories are trusted: the no-follow check protects the final file, not every
+  parent component. Only the target file is tightened to mode `0600`; existing directories are not modified.
+- JSONL records contain time, backend, session, source, action, verdict, confidence, duration in
+  milliseconds and a fixed error category. Confidence is backend metadata (Jev's selected-choice
+  probability, including when an allow is escalated), or `null` when unavailable; it is never
+  inferred from the reason. Reasons, raw errors, conversation and general tool input are not logged.
+  A logged verdict is the reviewer's answer, not proof that the host executed or approved the operation.
+- Command recording is a separate opt-in for actual `bash` commands or permission metadata,
+  never permission patterns. Redaction is **best-effort, not exhaustive**: shell syntax, short flags
+  such as `mysql -pSECRET`, `curl -u user:pass`, and here-documents can still expose credentials. Do not
+  enable it for sensitive workloads. Inputs over 64 KiB (UTF-8) are omitted entirely before
+  redaction; remaining redacted text is capped at 2,048 characters.
+- Writes use append/create/write-only/no-follow flags, verify a regular single-link file and set
+  its permissions to `0600` through the open handle before writing. A pre-placed symlink is refused.
+  This requires POSIX no-follow and permission semantics: Windows auditing is unsupported and
+  fails with a fixed warning rather than an unsafe fallback. Unsupported filesystems, bad paths
+  and other log failures never change approval decisions.
+- Logging is asynchronous and best-effort, with at most 1,000 queued entries plus one active
+  write. A full queue drops new entries; errors and drops emit fixed, non-secret warnings.
+  Shutdown can lose queued records. There is no automatic rotation or retention policy; manage
+  the file yourself. This is not a durable compliance ledger.
+
+### Bounded conversation context
+
+`conversation.enabled` defaults to `true`. Each review reads the current session's available
+history, retaining at most **8 whole turns / 12,000 characters**. Only user turns are included by
+default, so a short request such as "continue" can refer to an earlier user instruction without
+letting assistant prose establish consent. `conversation.includeAssistant: true` also sends
+assistant text as untrusted context, never as authorization. Tool output, synthetic/ignored parts,
+reviewer messages and compaction summaries are excluded. No `AGENTS.md` files are automatically
+loaded into the payload; configured `reviewer.instructions` still apply to both backends.
+
+History reads can add up to **1 second** (`HISTORY_TIMEOUT_MS`) before each review, including every
+tool call in `all-tools` mode. V1 requests at most **32 host messages** (`HISTORY_MESSAGE_LIMIT`);
+V2 reads the host's context view, which may already have been compacted. There is no history cache.
+Set `conversation.enabled: false` to skip these reads and send only the currently captured prompt.
+The timeout stops waiting, not necessarily the underlying host read. Failures fall back to that
+prompt and mark the context incomplete.
+
+`incomplete` records observed compaction, local clipping or a failed history read, not an assumption
+that all history is missing. A full V1 page separately sets `historyLimitReached`: older messages
+may exist but their omission is not known. Neither a false flag nor a short response guarantees
+complete host history. The latest user request/revocation takes precedence; missing authorization
+must be escalated. A new user prompt during history loading or review cancels an otherwise allowed
+result. These are model instructions plus a host-side stale-result guard, not a guarantee against
+prompt injection.
+
+Both backends receive identical initial operation data, with the existing 64,000 encoded-character
+resource and 16,000 encoded-character intent limits; an allow is escalated if either is cut.
+Conversation limits are additional. The retained text goes to the selected reviewer provider with
+every review (and is billed with Jev); it may contain sensitive user content. Audit redaction does
+not redact model input. Disabling assistant turns reduces this exposure but does not eliminate it.
+
 ### Review modes
 
 | Mode               | Reviewed operations                                           | `allow`                   | `deny`                               | `escalate` / reviewer failure                             |
@@ -238,8 +314,8 @@ OpenCode's plugin API does not provide a way to create and await a new permissio
 `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict: the tool does
 not run and the user must explicitly retry after reviewing the reported reason.
 
-Both modes work the same way with either reviewer backend, except that the Jev backend always
-escalates an operation too large to send in full (see above).
+Both modes work the same way with either reviewer backend; an allow for an operation too large
+to send in full is escalated (see above).
 
 Explicit OpenCode `deny` rules always remain in effect. The plugin is an additional review layer;
 it never turns a built-in deny into an allow.

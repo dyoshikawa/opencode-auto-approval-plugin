@@ -88,6 +88,7 @@ describe("JevReviewer", () => {
     await expect(reviewer.review(request)).resolves.toEqual({
       verdict: "allow",
       reason: "Jev chose allow (allow 0.97, deny 0.00, escalate 0.00).",
+      confidence: 0.97,
     });
 
     const [url, init] = fetch.mock.calls[0] ?? [];
@@ -126,6 +127,7 @@ describe("JevReviewer", () => {
       verdict: "escalate",
       reason:
         "Jev leaned allow at 0.45, below the 0.60 threshold (allow 0.45, deny 0.15, escalate 0.40).",
+      confidence: 0.45,
     });
   });
 
@@ -194,6 +196,7 @@ describe("JevReviewer", () => {
     await expect(reviewer.review(request)).resolves.toEqual({
       verdict: "escalate",
       reason: "Jev leaned allow at 0.50, below the 0.60 threshold (confidence 0.50).",
+      confidence: 0.5,
     });
   });
 

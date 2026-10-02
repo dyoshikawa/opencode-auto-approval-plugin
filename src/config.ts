@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 import * as z from "zod/mini";
 
 const reviewerModes = ["on-ask", "all-tools"] as const;
@@ -24,6 +26,8 @@ export type JevConfiguration = {
 
 export type PluginConfiguration = {
   mode: ReviewerMode;
+  auditLog: { enabled: boolean; includeCommand: boolean; path?: string };
+  conversation: { enabled: boolean; includeAssistant: boolean };
   reviewer: {
     backend: ReviewerBackend;
     model?: ModelReference;
@@ -63,6 +67,19 @@ const jevConfigurationSchema = z.object({
 });
 
 const pluginConfigurationSchema = z.object({
+  auditLog: z.optional(
+    z.object({
+      enabled: z.optional(z.boolean()),
+      includeCommand: z.optional(z.boolean()),
+      path: z.optional(z.string().check(z.refine(isAbsolute))),
+    }),
+  ),
+  conversation: z.optional(
+    z.object({
+      enabled: z.optional(z.boolean()),
+      includeAssistant: z.optional(z.boolean()),
+    }),
+  ),
   mode: z.optional(z.enum(reviewerModes)),
   reviewer: z.optional(
     z.object({
@@ -93,6 +110,11 @@ export function parsePluginConfiguration(input: {
   const instructions = reviewerInstructions(reviewer?.instructions);
   return {
     mode: result.data.mode ?? "on-ask",
+    auditLog: auditConfiguration(result.data.auditLog),
+    conversation: {
+      enabled: result.data.conversation?.enabled ?? true,
+      includeAssistant: result.data.conversation?.includeAssistant ?? false,
+    },
     reviewer: {
       backend,
       model: reviewer?.model,
@@ -103,6 +125,22 @@ export function parsePluginConfiguration(input: {
         : {}),
     },
   };
+}
+
+function auditConfiguration(
+  input: z.infer<typeof pluginConfigurationSchema>["auditLog"],
+): PluginConfiguration["auditLog"] {
+  const configuration = {
+    enabled: input?.enabled ?? false,
+    includeCommand: input?.includeCommand ?? false,
+    path: input?.path,
+  };
+  if (configuration.enabled && !configuration.path) {
+    throw new Error(
+      "Invalid auto-approval plugin options: auditLog.path must be an absolute path when enabled.",
+    );
+  }
+  return configuration;
 }
 
 /**
