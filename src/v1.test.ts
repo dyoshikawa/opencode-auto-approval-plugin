@@ -27,6 +27,58 @@ function createPlugin(input: { verdict: ReviewerVerdict }) {
 }
 
 describe("V1 plugin (opencode 1.x)", () => {
+  it.each([
+    {
+      fields: { permission: "read", patterns: ["*.ts"], type: "bash", pattern: "*" },
+      action: "read",
+      pattern: ["*.ts"],
+    },
+    { fields: { type: "bash", pattern: "git status" }, action: "bash", pattern: "git status" },
+  ])(
+    "normalizes modern and legacy permission fields: $action",
+    async ({ fields, action, pattern }) => {
+      const { context, reply } = createContext();
+      const { plugin, review } = createPlugin({ verdict: "allow" });
+      const hooks = await plugin(context as never, {});
+      await hooks.event?.({
+        event: {
+          type: "permission.asked",
+          properties: {
+            id: "permission-1",
+            sessionID: "session-1",
+            ...fields,
+          },
+        },
+      } as never);
+      expect(review).toHaveBeenCalledWith(
+        expect.objectContaining({ action, resource: { pattern, metadata: undefined } }),
+      );
+      expect(reply).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([undefined, null, "", "   ", 42, {}])(
+    "preserves the human prompt for invalid actions: %s",
+    async (permission) => {
+      const { context, reply } = createContext();
+      const { plugin, review } = createPlugin({ verdict: "allow" });
+      const hooks = await plugin(context as never, {});
+      await hooks.event?.({
+        event: {
+          type: "permission.asked",
+          properties: {
+            id: "permission-1",
+            sessionID: "session-1",
+            permission,
+            ...(permission !== undefined ? { type: "bash" } : {}),
+          },
+        },
+      } as never);
+      expect(review).not.toHaveBeenCalled();
+      expect(reply).not.toHaveBeenCalled();
+    },
+  );
+
   it("registers no reviewer agent for the jev backend", async () => {
     const { context } = createContext();
     const { plugin } = createPlugin({ verdict: "allow" });

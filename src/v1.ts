@@ -20,7 +20,9 @@ import { isRecord, reviewForApproval, reviewToolCallOrThrow, textFromParts } fro
 type PermissionRequest = {
   id: string;
   sessionID: string;
-  type: string;
+  permission?: unknown;
+  patterns?: string[];
+  type?: unknown;
   pattern?: string | string[];
   metadata?: Record<string, unknown>;
 };
@@ -146,14 +148,17 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
 
         const request = event.properties as PermissionRequest;
         if (reviewer.isReviewerSession({ sessionID: request.sessionID })) return;
+        // A malformed modern action must not fall back to an unrelated legacy action.
+        const action = request.permission !== undefined ? request.permission : request.type;
+        if (typeof action !== "string" || action.trim().length === 0) return;
 
         const decision = await reviewForApproval({
           reviewer,
           request: {
             source: "permission-request",
             sessionID: request.sessionID,
-            action: request.type,
-            resource: { pattern: request.pattern, metadata: request.metadata },
+            action,
+            resource: { pattern: request.patterns ?? request.pattern, metadata: request.metadata },
             userIntent: intents.get(request.sessionID),
             model: models.get(request.sessionID),
           },
