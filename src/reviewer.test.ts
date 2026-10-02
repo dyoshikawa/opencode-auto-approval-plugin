@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { parsePluginConfiguration } from "./config.js";
-import { OpenCodeReviewer, type ReviewSessionClient } from "./reviewer.js";
+import {
+  OpenCodeReviewer,
+  type ReviewSessionClient,
+  userInstructionsPreamble,
+} from "./reviewer.js";
 
 type ReviewPrompt = Parameters<ReviewSessionClient["prompt"]>[0];
 type ReviewSessionOptions = Parameters<ReviewSessionClient["create"]>[0];
@@ -115,6 +119,42 @@ describe("Reviewer", () => {
       resource: { command: "git push --force" },
       userIntent: injectedUserIntent,
     });
+  });
+
+  it("places configured instructions before the untrusted operation data", async () => {
+    const client = clientWithResponse({ response: '{"verdict":"allow","reason":"configured"}' });
+    const reviewer = new OpenCodeReviewer({
+      client,
+      configuration: parsePluginConfiguration({
+        options: { reviewer: { instructions: ["`pnpm test` is always safe."] } },
+      }),
+    });
+
+    await reviewer.review({
+      source: "permission-request",
+      sessionID: "main-session",
+      action: "bash",
+      resource: { command: "pnpm test" },
+    });
+
+    const prompt = client.prompts[0]?.text ?? "";
+    const instructions = prompt.indexOf("`pnpm test` is always safe.");
+    expect(prompt).toContain(userInstructionsPreamble);
+    expect(instructions).toBeGreaterThan(-1);
+    expect(instructions).toBeLessThan(prompt.indexOf("Return JSON only"));
+    expect(instructions).toBeLessThan(prompt.search(/--- UNTRUSTED_OPERATION_[\da-f-]+ BEGIN ---/));
+  });
+
+  it("adds no instruction block when none is configured", async () => {
+    const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
+    const reviewer = new OpenCodeReviewer({
+      client,
+      configuration: parsePluginConfiguration({ options: {} }),
+    });
+
+    await reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} });
+
+    expect(client.prompts[0]?.text).not.toContain(userInstructionsPreamble);
   });
 
   it("tracks the reviewer session only while the review is running", async () => {

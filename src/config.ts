@@ -28,6 +28,8 @@ export type PluginConfiguration = {
     backend: ReviewerBackend;
     model?: ModelReference;
     timeoutMs: number;
+    /** The user's own review policy, added to every review as trusted guidance. */
+    instructions?: string;
     jev?: JevConfiguration;
   };
 };
@@ -39,6 +41,12 @@ const defaultJevBaseURL = "https://api.typesafe.ai";
 const defaultJevModel = "jev-latest";
 
 const defaultMinAllowProbability = 0.6;
+
+/**
+ * Custom instructions are sent with every review (and billed per call with the
+ * jev backend), so they are kept to a short policy rather than a document.
+ */
+const MAX_INSTRUCTIONS_CHARS = 4_000;
 
 const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -61,6 +69,7 @@ const pluginConfigurationSchema = z.object({
       backend: z.optional(z.enum(reviewerBackends)),
       model: z.optional(modelReferenceSchema),
       timeoutMs: z.optional(z.number().check(z.gte(1), z.lte(120_000))),
+      instructions: z.optional(z.union([z.string(), z.array(z.string())])),
       jev: z.optional(jevConfigurationSchema),
     }),
   ),
@@ -81,17 +90,38 @@ export function parsePluginConfiguration(input: {
 
   const reviewer = result.data.reviewer;
   const backend = reviewer?.backend ?? "opencode";
+  const instructions = reviewerInstructions(reviewer?.instructions);
   return {
     mode: result.data.mode ?? "on-ask",
     reviewer: {
       backend,
       model: reviewer?.model,
       timeoutMs: reviewer?.timeoutMs ?? 30_000,
+      ...(instructions === undefined ? {} : { instructions }),
       ...(backend === "jev"
         ? { jev: jevConfiguration({ options: reviewer?.jev, env: input.env ?? process.env }) }
         : {}),
     },
   };
+}
+
+/**
+ * Joins the configured instructions into one block. An array is the readable
+ * form in JSON, which cannot hold a multi-line string; blank entries are
+ * dropped so a list can be commented out line by line.
+ */
+function reviewerInstructions(input: string | string[] | undefined): string | undefined {
+  const lines = (typeof input === "string" ? [input] : (input ?? []))
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+  if (lines.length === 0) return undefined;
+  const text = lines.join("\n");
+  if (text.length > MAX_INSTRUCTIONS_CHARS) {
+    throw new Error(
+      `Invalid auto-approval plugin options: reviewer.instructions must be at most ${MAX_INSTRUCTIONS_CHARS} characters.`,
+    );
+  }
+  return text;
 }
 
 function jevConfiguration(input: {

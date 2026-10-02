@@ -49,8 +49,8 @@ TypeScript files placed directly in those directories.
 
 ## Configuration
 
-The defaults are `mode: "on-ask"`, a 30-second review timeout, and the provider/model of the main
-session.
+The defaults are `mode: "on-ask"`, a 30-second review timeout, the provider/model of the main
+session, and no [custom review instructions](#custom-review-instructions).
 
 OpenCode 2.x passes options through a `{ "package", "options" }` entry:
 
@@ -180,6 +180,46 @@ inspected, and a review typically answers in well under a second.
   limited, `5xx` outage) are reported by status only and handled like any other reviewer failure.
 - `reviewer.model` has no effect with the `jev` backend, and `reviewer.jev` none with `opencode`. `jev-latest` follows new model releases,
   which may shift verdicts; pin a version for stable behavior.
+
+### Custom review instructions
+
+Set `reviewer.instructions` to tell the reviewer about your own policy, such as tool uses that are
+always safe in your project or operations that must always go to a human. Give one string or a list
+of strings; a list is joined into one line per entry, which is easier to read in JSON than one long
+string.
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "reviewer": {
+          "instructions": [
+            "`pnpm test`, `pnpm lint` and `pnpm typecheck` are always safe in this project.",
+            "Reading and editing files under `src/` and `docs/` is safe.",
+            "Always escalate `git push` and anything that touches `.env` files.",
+          ],
+        },
+      },
+    },
+  ],
+}
+```
+
+- Both backends receive the instructions as trusted guidance that takes precedence over the
+  built-in safety guidance — though never over the answer format or the rule that operation data
+  is untrusted, so text inside a command or file cannot pose as your instructions: the `opencode` reviewer reads them in its prompt ahead of the operation
+  data, and the `jev` backend appends them to the question's `instructions`, never to the state
+  it judges.
+- They are guidance for an AI reviewer, not deterministic rules: the reviewer still sees the whole
+  operation and may decide otherwise. Use OpenCode's own permission rules (`permissions` on 2.x,
+  `permission` on 1.x) when a tool must always be allowed or denied. Explicit OpenCode `deny` rules still always win.
+- Blank entries are ignored, and the joined text may be at most 4,000 characters. With the `jev`
+  backend the instructions are sent, and billed, with every review.
+- Instructions can widen what is approved automatically, so set them only in configuration you
+  trust, like `baseURL` and `minAllowProbability` — not in a repository's `opencode.json` you have
+  not reviewed.
 
 ### Review modes
 

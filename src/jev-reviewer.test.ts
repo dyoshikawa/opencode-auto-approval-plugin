@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { parsePluginConfiguration } from "./config.js";
 import { JevReviewer } from "./jev-reviewer.js";
-import type { ReviewRequest } from "./reviewer.js";
+import { type ReviewRequest, userInstructionsPreamble } from "./reviewer.js";
 
 const request: ReviewRequest = {
   source: "permission-request",
@@ -12,12 +12,15 @@ const request: ReviewRequest = {
   userIntent: "Run the tests",
 };
 
-function configuration(input: { timeoutMs?: number; minAllowProbability?: number } = {}) {
+function configuration(
+  input: { timeoutMs?: number; minAllowProbability?: number; instructions?: string[] } = {},
+) {
   return parsePluginConfiguration({
     options: {
       reviewer: {
         backend: "jev",
         timeoutMs: input.timeoutMs ?? 30_000,
+        instructions: input.instructions,
         jev: { minAllowProbability: input.minAllowProbability },
       },
     },
@@ -44,6 +47,7 @@ function reviewerWith(input: {
   response: () => Promise<Response>;
   timeoutMs?: number;
   minAllowProbability?: number;
+  instructions?: string[];
 }) {
   const fetch = vi.fn<typeof globalThis.fetch>(input.response);
   const reviewer = new JevReviewer({ configuration: configuration(input), fetch });
@@ -51,6 +55,31 @@ function reviewerWith(input: {
 }
 
 describe("JevReviewer", () => {
+  it("adds configured instructions to the question, not to the state", async () => {
+    const { reviewer, fetch } = reviewerWith({
+      response: async () => answer({ choice: "allow" }),
+      instructions: ["`pnpm test` is always safe."],
+    });
+
+    await reviewer.review(request);
+
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+    const instructions: string = body.questions.verdict.instructions;
+    expect(
+      instructions.endsWith(`\n${userInstructionsPreamble}\n\`pnpm test\` is always safe.`),
+    ).toBe(true);
+    expect(JSON.stringify(body.state)).not.toContain("always safe");
+  });
+
+  it("sends only the built-in instructions when none are configured", async () => {
+    const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "allow" }) });
+
+    await reviewer.review(request);
+
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+    expect(body.questions.verdict.instructions).not.toContain(userInstructionsPreamble);
+  });
+
   it("asks one Choice question over the operation state", async () => {
     const { reviewer, fetch } = reviewerWith({
       response: async () => answer({ choice: "allow", probabilities: { allow: 0.97 } }),
