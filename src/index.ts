@@ -1,3 +1,4 @@
+import { AuditingReviewer, createAuditLogger } from "./audit.js";
 import { JevReviewer } from "./jev-reviewer.js";
 import { OpenCodeReviewer } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
@@ -5,10 +6,19 @@ import { createV1Plugin } from "./v1.js";
 import { createV2Plugin } from "./v2.js";
 
 const defaultDependencies: PluginDependencies = {
-  createReviewer: (input) =>
-    input.configuration.reviewer.backend === "jev"
-      ? new JevReviewer({ configuration: input.configuration })
-      : new OpenCodeReviewer(input),
+  createReviewer: (input) => {
+    const reviewer =
+      input.configuration.reviewer.backend === "jev"
+        ? new JevReviewer({ configuration: input.configuration })
+        : new OpenCodeReviewer(input);
+    const audit = input.configuration.auditLog;
+    if (!audit.enabled || !audit.path) return reviewer;
+    return new AuditingReviewer({
+      reviewer,
+      configuration: input.configuration,
+      logger: createAuditLogger({ path: audit.path }),
+    });
+  },
 };
 
 /**

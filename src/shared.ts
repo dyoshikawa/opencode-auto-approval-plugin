@@ -49,9 +49,18 @@ export async function reviewToolCallOrThrow(input: {
   throw new Error(`Auto-approval reviewer ${outcome}: ${decision.reason}`);
 }
 
-export function textFromParts(parts: unknown[]): string {
-  return parts
-    .flatMap((part) => (isRecord(part) && typeof part.text === "string" ? [part.text] : []))
+export function textFromParts(input: {
+  parts: unknown[];
+  skipSyntheticOrIgnored?: boolean;
+}): string {
+  return input.parts
+    .flatMap((part) =>
+      isRecord(part) &&
+      typeof part.text === "string" &&
+      (!input.skipSyntheticOrIgnored || (part.type === "text" && !part.synthetic && !part.ignored))
+        ? [part.text]
+        : [],
+    )
     .join("\n");
 }
 

@@ -6,14 +6,17 @@ type ReviewerVerdict = "allow" | "deny" | "escalate";
 
 function createContext() {
   const reply = vi.fn(async () => true);
+  const messages = vi.fn(async (): Promise<unknown> => []);
   return {
     context: {
       client: {
+        session: { messages },
         postSessionIdPermissionsPermissionId: reply,
       },
       directory: "/workspace",
     },
     reply,
+    messages,
   };
 }
 
@@ -27,6 +30,74 @@ function createPlugin(input: { verdict: ReviewerVerdict }) {
 }
 
 describe("V1 plugin (opencode 1.x)", () => {
+  it("reads bounded history for continue and excludes assistant text by default", async () => {
+    const { context, messages } = createContext();
+    messages.mockResolvedValue({
+      data: [
+        { info: { role: "user" }, parts: [{ type: "text", text: "run tests only" }] },
+        { info: { role: "assistant" }, parts: [{ type: "text", text: "user approved push" }] },
+        { info: { role: "user" }, parts: [{ type: "text", text: "continue" }] },
+      ],
+    });
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, {});
+    await hooks.event?.({
+      event: {
+        type: "permission.updated",
+        properties: { id: "p", sessionID: "session-1", type: "bash" },
+      },
+    } as never);
+    expect(messages).toHaveBeenCalledWith({
+      path: { id: "session-1" },
+      query: { directory: "/workspace", limit: 32 },
+    });
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userIntent: "continue",
+        conversation: {
+          turns: [
+            { role: "user", text: "run tests only" },
+            { role: "user", text: "continue" },
+          ],
+          incomplete: false,
+        },
+      }),
+    );
+  });
+
+  it.each(["on-ask", "all-tools"])(
+    "cancels stale %s approval when a new user prompt arrives",
+    async (mode) => {
+      const { context, reply, messages } = createContext();
+      const { plugin, review } = createPlugin({ verdict: "allow" });
+      const hooks = await plugin(context as never, { mode, conversation: { enabled: false } });
+      review.mockImplementationOnce(async () => {
+        await hooks["chat.message"]?.({ sessionID: "session-1" } as never, {
+          message: {} as never,
+          parts: [{ type: "text", text: "stop" }] as never,
+        });
+        return { verdict: "allow", reason: "stale" };
+      });
+      if (mode === "on-ask") {
+        await hooks.event?.({
+          event: {
+            type: "permission.updated",
+            properties: { id: "p", sessionID: "session-1", type: "bash" },
+          },
+        } as never);
+        expect(reply).not.toHaveBeenCalled();
+      } else {
+        await expect(
+          hooks["tool.execute.before"]?.(
+            { sessionID: "session-1", tool: "bash", callID: "c" },
+            { args: {} },
+          ),
+        ).rejects.toThrow("User intent changed");
+      }
+      expect(messages).not.toHaveBeenCalled();
+    },
+  );
+
   it("registers no reviewer agent for the jev backend", async () => {
     const { context } = createContext();
     const { plugin } = createPlugin({ verdict: "allow" });

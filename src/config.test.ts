@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { parsePluginConfiguration } from "./config.js";
@@ -7,9 +9,29 @@ function jevOptions(jev: Record<string, unknown> = {}) {
 }
 
 describe("parsePluginConfiguration", () => {
+  it("requires an explicit absolute audit path and accepts conversation privacy controls", () => {
+    expect(() => parsePluginConfiguration({ options: { auditLog: { enabled: true } } })).toThrow(
+      "absolute path",
+    );
+    expect(() =>
+      parsePluginConfiguration({ options: { auditLog: { path: "audit.jsonl" } } }),
+    ).toThrow("Invalid auto-approval");
+    const path = join(process.cwd(), "tmp", "audit.jsonl");
+    const config = parsePluginConfiguration({
+      options: {
+        auditLog: { enabled: true, path, includeCommand: true },
+        conversation: { enabled: false, includeAssistant: true },
+      },
+      env: { OPENCODE_DATA_DIR: "ignored", XDG_DATA_HOME: "ignored" },
+    });
+    expect(config.auditLog).toEqual({ enabled: true, path, includeCommand: true });
+    expect(config.conversation).toEqual({ enabled: false, includeAssistant: true });
+  });
   it("uses the safe on-ask defaults", () => {
     expect(parsePluginConfiguration({ options: {}, env: {} })).toEqual({
       mode: "on-ask",
+      auditLog: { enabled: false, includeCommand: false },
+      conversation: { enabled: true, includeAssistant: false },
       reviewer: { backend: "opencode", timeoutMs: 30_000 },
     });
   });
@@ -27,6 +49,8 @@ describe("parsePluginConfiguration", () => {
       }),
     ).toEqual({
       mode: "all-tools",
+      auditLog: { enabled: false, includeCommand: false },
+      conversation: { enabled: true, includeAssistant: false },
       reviewer: {
         backend: "opencode",
         model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
