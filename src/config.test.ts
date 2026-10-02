@@ -41,6 +41,52 @@ describe("parsePluginConfiguration", () => {
     );
   });
 
+  describe("reviewer instructions", () => {
+    it("accepts a single string", () => {
+      expect(
+        parsePluginConfiguration({
+          options: { reviewer: { instructions: "  `pnpm test` is always safe.  " } },
+          env: {},
+        }).reviewer.instructions,
+      ).toBe("`pnpm test` is always safe.");
+    });
+
+    it("joins a list into lines and drops blank entries", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              instructions: ["`pnpm test` is always safe.", " ", "Never allow `git push`."],
+            },
+          },
+          env: {},
+        }).reviewer.instructions,
+      ).toBe("`pnpm test` is always safe.\nNever allow `git push`.");
+    });
+
+    it("leaves the option out when every entry is blank", () => {
+      expect(
+        parsePluginConfiguration({ options: { reviewer: { instructions: ["", " "] } }, env: {} })
+          .reviewer,
+      ).not.toHaveProperty("instructions");
+    });
+
+    it("rejects instructions that are not text", () => {
+      expect(() =>
+        parsePluginConfiguration({ options: { reviewer: { instructions: [1] } }, env: {} }),
+      ).toThrow("Invalid auto-approval plugin options");
+    });
+
+    it("rejects instructions longer than 4,000 characters", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { instructions: ["x".repeat(2_000), "y".repeat(2_000)] } },
+          env: {},
+        }),
+      ).toThrow("reviewer.instructions must be at most 4000 characters");
+    });
+  });
+
   it("does not require Jev credentials for the opencode backend", () => {
     expect(
       parsePluginConfiguration({ options: { reviewer: { backend: "opencode" } }, env: {} })

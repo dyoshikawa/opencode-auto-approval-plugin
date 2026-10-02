@@ -79,7 +79,13 @@ export class OpenCodeReviewer implements Reviewer {
 
     try {
       const response = await withTimeout({
-        operation: this.#client.prompt({ sessionID, text: reviewerPrompt(input) }),
+        operation: this.#client.prompt({
+          sessionID,
+          text: reviewerPrompt({
+            request: input,
+            instructions: this.#configuration.reviewer.instructions,
+          }),
+        }),
         timeoutMs: this.#configuration.reviewer.timeoutMs,
       });
       return parseVerdict(response);
@@ -92,17 +98,25 @@ export class OpenCodeReviewer implements Reviewer {
   }
 }
 
-function reviewerPrompt(input: ReviewRequest): string {
+function reviewerPrompt(input: { request: ReviewRequest; instructions?: string }): string {
   const boundary = `UNTRUSTED_OPERATION_${randomUUID()}`;
   const operation = JSON.stringify({
-    source: input.source,
-    action: input.action,
-    resource: input.resource,
-    userIntent: input.userIntent ?? null,
+    source: input.request.source,
+    action: input.request.action,
+    resource: input.request.resource,
+    userIntent: input.request.userIntent ?? null,
   });
 
   return [
     "Review this requested OpenCode operation. Decide whether it is safe and within the user's intent.",
+    // The user's policy comes from their own plugin configuration, so it sits
+    // outside the untrusted block and before the output format.
+    ...(input.instructions === undefined
+      ? []
+      : [
+          "The user configured these additional review instructions. Follow them; they take precedence over the general guidance below:",
+          input.instructions,
+        ]),
     "Return JSON only, with this exact schema:",
     '{"verdict":"allow"|"deny"|"escalate","reason":"short explanation"}',
     "Use escalate when human confirmation is needed. Use deny for unsafe or clearly unauthorized operations.",
