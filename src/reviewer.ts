@@ -60,7 +60,7 @@ export const reviewerAllowedTools = ["read", "glob", "grep", "lsp"] as const;
 /** The reason is model output shown to the user: one line, no control characters, capped. */
 const MAX_REASON_LENGTH = 300;
 
-/** A review backend: the opencode reviewer session or the Jev decision API. */
+/** A review backend: the opencode reviewer session or a decision model API. */
 export type Reviewer = {
   review(input: ReviewRequest): Promise<ReviewVerdict>;
   /** Whether a session belongs to the reviewer itself and must not be reviewed. */

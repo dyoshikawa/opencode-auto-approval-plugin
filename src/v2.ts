@@ -87,7 +87,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       const intents = new Map<string, string>();
 
       // `update` on an unknown ID registers a new agent; the branded ID/Name
-      // types are plain strings at runtime. The Jev backend needs no agent.
+      // types are plain strings at runtime. The decision-model backend needs no agent.
       if (configuration.reviewer.backend === "opencode") {
         await context.agent.transform((editor) => {
           editor.update(reviewerAgentName as unknown as Agent.ID, (agent) => {
@@ -104,7 +104,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       // Both the session ID and the agent name identify the reviewer: the ID
       // is forgotten the moment a review ends, while an interrupted reviewer
       // session may still be winding down under its agent. The name only
-      // counts when this plugin defined that agent as read-only; under Jev an
+      // counts when this plugin defined that agent as read-only; with a decision model an
       // agent of that name is someone else's and must be reviewed.
       const isReviewer = (event: { sessionID: string; agent?: string }): boolean =>
         (configuration.reviewer.backend === "opencode" && event.agent === reviewerAgentName) ||
