@@ -27,11 +27,14 @@ function createPlugin(input: { verdict: ReviewerVerdict }) {
 }
 
 describe("V1 plugin (opencode 1.x)", () => {
-  it("registers no reviewer agent for the jev backend", async () => {
+  it("registers no reviewer agent for the decision-model backend", async () => {
     const { context } = createContext();
     const { plugin } = createPlugin({ verdict: "allow" });
     const hooks = await plugin(context as never, {
-      reviewer: { backend: "jev", jev: { apiKey: "test-key" } },
+      reviewer: {
+        backend: "decision-model",
+        decisionModel: { provider: "typesafe", apiKey: "test-key" },
+      },
     });
     const config: { agent?: Record<string, unknown> } = {};
 

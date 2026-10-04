@@ -20,7 +20,7 @@ describe("parsePluginConfiguration", () => {
   it("uses the safe on-ask defaults", () => {
     expect(parsePluginConfiguration({ options: {}, env: {} })).toEqual({
       mode: "on-ask",
-      reviewer: { backend: "opencode", timeoutMs: 30_000 },
+      reviewer: { backend: "opencode", timeoutMs: 30_000, recordUsage: true },
     });
   });
 
@@ -41,6 +41,7 @@ describe("parsePluginConfiguration", () => {
         backend: "opencode",
         model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
         timeoutMs: 12_000,
+        recordUsage: true,
       },
     });
   });
@@ -319,6 +320,15 @@ describe("parsePluginConfiguration", () => {
       ).toThrow("needs reviewer.decisionModel.accountId or CLOUDFLARE_ACCOUNT_ID");
     });
 
+    it("accepts an account ID in uppercase", () => {
+      expect(
+        parsePluginConfiguration({
+          options: cloudflareOptions({ apiKey: "key", accountId: accountId.toUpperCase() }),
+          env: {},
+        }).reviewer.decisionModel?.endpoint,
+      ).toContain(`/accounts/${accountId}/`);
+    });
+
     it.each([
       ["a path segment", "../../zones"],
       ["a query", `${accountId}?x=1`],
@@ -329,7 +339,7 @@ describe("parsePluginConfiguration", () => {
           options: cloudflareOptions({ apiKey: "key", accountId: id }),
           env: {},
         }),
-      ).toThrow("the Cloudflare account ID must be 32 lowercase hexadecimal characters");
+      ).toThrow("the Cloudflare account ID must be 32 hexadecimal characters");
     });
 
     it.each(["../clef", "clef/../../x", "@cf/cloudflare/clef", "clef?x=1", "Clef"])(
@@ -374,6 +384,45 @@ describe("parsePluginConfiguration", () => {
     });
   });
 
+  describe("options of an unused backend", () => {
+    it("starts the opencode backend whatever reviewer.decisionModel holds", () => {
+      expect(
+        parsePluginConfiguration({
+          options: { reviewer: { decisionModel: { model: "clef" }, jev: "x" } },
+          env: {},
+        }).reviewer.backend,
+      ).toBe("opencode");
+    });
+
+    it("refuses reviewer.jev next to the decision-model backend", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "decision-model",
+              decisionModel: { provider: "typesafe", apiKey: "key" },
+              jev: { baseURL: "https://proxy.example" },
+            },
+          },
+          env: {},
+        }),
+      ).toThrow("reviewer.jev is only read with the deprecated reviewer.backend");
+    });
+  });
+
+  describe("usage log", () => {
+    it("records decision model usage by default", () => {
+      expect(parsePluginConfiguration({ options: {}, env: {} }).reviewer.recordUsage).toBe(true);
+    });
+
+    it("can be turned off", () => {
+      expect(
+        parsePluginConfiguration({ options: { reviewer: { recordUsage: false } }, env: {} })
+          .reviewer.recordUsage,
+      ).toBe(false);
+    });
+  });
+
   describe("deprecated jev backend", () => {
     it("still reads reviewer.jev as the typesafe provider", () => {
       expect(
@@ -384,6 +433,7 @@ describe("parsePluginConfiguration", () => {
       ).toEqual({
         backend: "decision-model",
         timeoutMs: 30_000,
+        recordUsage: true,
         decisionModel: {
           provider: "typesafe",
           apiKey: "option-key",

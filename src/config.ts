@@ -11,7 +11,7 @@ type ReviewerMode = (typeof reviewerModes)[number];
 
 type ReviewerBackend = "opencode" | "decision-model";
 
-type DecisionModelProvider = (typeof decisionModelProviders)[number];
+export type DecisionModelProvider = (typeof decisionModelProviders)[number];
 
 export type ModelReference = {
   providerID: string;
@@ -36,6 +36,8 @@ export type PluginConfiguration = {
     timeoutMs: number;
     /** The user's own review policy, added to every review as trusted guidance. */
     instructions?: string;
+    /** Whether decision model reviews are appended to the usage log. */
+    recordUsage: boolean;
     decisionModel?: DecisionModelConfiguration;
   };
 };
@@ -98,8 +100,11 @@ const pluginConfigurationSchema = z.object({
       model: z.optional(modelReferenceSchema),
       timeoutMs: z.optional(z.number().check(z.gte(1), z.lte(120_000))),
       instructions: z.optional(z.union([z.string(), z.array(z.string())])),
-      decisionModel: z.optional(decisionModelOptionsSchema),
-      jev: z.optional(typeSafeOptionsSchema),
+      recordUsage: z.optional(z.boolean()),
+      // Checked only when the decision-model backend reads them, so another
+      // backend starts whatever they hold.
+      decisionModel: z.optional(z.unknown()),
+      jev: z.optional(z.unknown()),
     }),
   ),
 });
@@ -131,6 +136,7 @@ export function parsePluginConfiguration(input: {
       model: reviewer?.model,
       timeoutMs: reviewer?.timeoutMs ?? 30_000,
       ...(instructions === undefined ? {} : { instructions }),
+      recordUsage: reviewer?.recordUsage ?? true,
       ...(backend === "decision-model"
         ? { decisionModel: decisionModelConfiguration({ reviewer, env }) }
         : {}),
@@ -173,18 +179,27 @@ function decisionModelConfiguration(input: {
         'Invalid auto-approval plugin options: reviewer.decisionModel needs reviewer.backend "decision-model"; "jev" reads reviewer.jev.',
       );
     }
+    const jev = parseOptions({ schema: typeSafeOptionsSchema, value: reviewer.jev ?? {} });
     return typeSafeConfiguration({
-      options: { provider: "typesafe", ...reviewer.jev },
+      options: { provider: "typesafe", ...jev },
       env: input.env,
       prefix: "reviewer.jev",
     });
   }
-  const options = reviewer?.decisionModel;
-  if (options === undefined) {
+  if (reviewer?.jev !== undefined) {
+    throw new Error(
+      'Invalid auto-approval plugin options: reviewer.jev is only read with the deprecated reviewer.backend "jev"; move it to reviewer.decisionModel.',
+    );
+  }
+  if (reviewer?.decisionModel === undefined) {
     throw new Error(
       'Invalid auto-approval plugin options: the decision-model backend needs reviewer.decisionModel with a provider ("typesafe" or "cloudflare").',
     );
   }
+  const options = parseOptions({
+    schema: decisionModelOptionsSchema,
+    value: reviewer.decisionModel,
+  });
   return options.provider === "typesafe"
     ? typeSafeConfiguration({ options, env: input.env, prefix: "reviewer.decisionModel" })
     : cloudflareConfiguration({ options, env: input.env });
@@ -242,8 +257,10 @@ function cloudflareConfiguration(input: {
       "Invalid auto-approval plugin options: the cloudflare provider needs reviewer.decisionModel.apiKey or CLOUDFLARE_API_TOKEN.",
     );
   }
-  const accountID =
-    nonEmpty(input.options.accountId?.trim()) ?? nonEmpty(input.env.CLOUDFLARE_ACCOUNT_ID?.trim());
+  // Account IDs are hexadecimal; the dashboard shows them in lowercase.
+  const accountID = (
+    nonEmpty(input.options.accountId?.trim()) ?? nonEmpty(input.env.CLOUDFLARE_ACCOUNT_ID?.trim())
+  )?.toLowerCase();
   if (accountID === undefined) {
     throw new Error(
       "Invalid auto-approval plugin options: the cloudflare provider needs reviewer.decisionModel.accountId or CLOUDFLARE_ACCOUNT_ID.",
@@ -251,7 +268,7 @@ function cloudflareConfiguration(input: {
   }
   if (!cloudflareAccountIDPattern.test(accountID)) {
     throw new Error(
-      "Invalid auto-approval plugin options: the Cloudflare account ID must be 32 lowercase hexadecimal characters.",
+      "Invalid auto-approval plugin options: the Cloudflare account ID must be 32 hexadecimal characters.",
     );
   }
   const model = input.options.model ?? defaultModels.cloudflare;
@@ -300,6 +317,14 @@ function typeSafeEndpoint(baseURL: string): string {
     );
   }
   return new URL("/v1/systemone", url).href;
+}
+
+function parseOptions<T>(input: { schema: z.ZodMiniType<T>; value: unknown }): T {
+  const result = z.safeParse(input.schema, input.value);
+  if (!result.success) {
+    throw new Error(`Invalid auto-approval plugin options: ${result.error.message}`);
+  }
+  return result.data;
 }
 
 function nonEmpty(input: string | undefined): string | undefined {

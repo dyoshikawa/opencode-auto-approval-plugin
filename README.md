@@ -161,7 +161,8 @@ same System One API:
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the
-  provider has no key (or, for Cloudflare, no valid account ID) or an invalid base URL. The
+  provider has no key (or, for Cloudflare, no valid account ID or model name) or an invalid
+  base URL. The
   variables are read by the process that loads the plugin: if OpenCode 2.x's background service
   was already running, run `opencode service restart` after exporting them.
 - `typesafe`: the key and the base URL come from the same place. With
@@ -204,6 +205,42 @@ same System One API:
 - Deprecated: `backend: "jev"` with `reviewer.jev` (`apiKey`, `baseURL`, `model`,
   `minAllowProbability`) from v0.3 still works and means `decision-model` with the `typesafe`
   provider. Combining it with `reviewer.decisionModel` fails at startup.
+
+### Usage and cost statistics
+
+Each decision model review appends one line to a usage log at
+`$XDG_DATA_HOME/opencode-auto-approval-plugin/usage.jsonl` (`~/.local/share/…` when `XDG_DATA_HOME`
+is unset): the time, provider, model, a hash of the project directory, input and output tokens,
+latency, the verdict (`error` for a failed call), and the cost at the time of the review. The
+operation, your prompt and the reason are never written, and the file is created readable by you
+only. Reviews with the `opencode` backend run in OpenCode sessions, so `opencode stats` already
+counts them.
+
+Show the totals with the bundled command, whose flags follow `opencode stats`:
+
+```sh
+npx opencode-auto-approval-plugin stats              # this year so far
+npx opencode-auto-approval-plugin stats --days 7     # the last 7 days (0 = today)
+npx opencode-auto-approval-plugin stats --all --project . --json
+```
+
+```text
+auto-approval stats · last 7 days · all projects
+
+reviews 1,284   tokens 612k in / 51k out   cost $0.11
+
+provider    model       reviews  tokens in  tokens out      cost  p50 latency
+cloudflare  clef            904       431k           0  $0.10       412 ms
+typesafe    jev-latest      380       181k         51k  $0.00760    212 ms
+
+verdicts  allow 81% · escalate 15% · deny 3% · error 1%
+```
+
+- Costs use the input prices published on 2026-10-04 (USD per million tokens: Jev $0.042, Clef
+  $0.24, Clef-flash $0.09; output tokens are free). A model without a known price is counted but
+  left out of the cost, and the summary says how many reviews that was.
+- Set `reviewer.recordUsage` to `false` to stop writing the log. A failure to write it never
+  affects a review.
 
 ### Custom review instructions
 

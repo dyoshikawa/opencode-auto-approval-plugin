@@ -83,6 +83,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       const reviewer = dependencies.createReviewer({
         client: createV2SessionClient(context),
         configuration,
+        directory: context.location.directory,
       });
       const intents = new Map<string, string>();
 
