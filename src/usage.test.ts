@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { costUSD, fileUsageRecorder, projectID, type UsageRecord, usageLogPath } from "./usage.js";
 
@@ -19,6 +19,11 @@ const record: UsageRecord = {
   costUSD: 0.00005256,
 };
 
+const endpoints = {
+  typesafe: "https://api.typesafe.ai/v1/systemone",
+  cloudflare: "https://api.cloudflare.com/client/v4/accounts/x/ai/run/@cf/cloudflare/clef",
+} as const;
+
 describe("costUSD", () => {
   it.each([
     ["typesafe", "jev-latest", 1_000_000, 0.042],
@@ -26,13 +31,39 @@ describe("costUSD", () => {
     ["cloudflare", "clef", 1_000_000, 0.24],
     ["cloudflare", "clef-flash", 1_000_000, 0.09],
   ] as const)("prices %s %s", (provider, model, inputTokens, expected) => {
-    expect(costUSD({ provider, model, inputTokens })).toBeCloseTo(expected, 10);
+    expect(costUSD({ provider, endpoint: endpoints[provider], model, inputTokens })).toBeCloseTo(
+      expected,
+      10,
+    );
   });
 
   it("leaves an unknown model or a missing token count unpriced", () => {
-    expect(costUSD({ provider: "cloudflare", model: "clef-next", inputTokens: 10 })).toBeNull();
-    expect(costUSD({ provider: "cloudflare", model: "constructor", inputTokens: 10 })).toBeNull();
-    expect(costUSD({ provider: "typesafe", model: "jev-latest", inputTokens: null })).toBeNull();
+    const endpoint = endpoints.cloudflare;
+    expect(
+      costUSD({ provider: "cloudflare", endpoint, model: "clef-next", inputTokens: 10 }),
+    ).toBeNull();
+    expect(
+      costUSD({ provider: "cloudflare", endpoint, model: "constructor", inputTokens: 10 }),
+    ).toBeNull();
+    expect(
+      costUSD({
+        provider: "typesafe",
+        endpoint: endpoints.typesafe,
+        model: "jev-latest",
+        inputTokens: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("does not price a self-hosted System One endpoint", () => {
+    expect(
+      costUSD({
+        provider: "typesafe",
+        endpoint: "http://localhost:8787/v1/systemone",
+        model: "jev-latest",
+        inputTokens: 1_000,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -60,14 +91,18 @@ describe("projectID", () => {
 });
 
 describe("fileUsageRecorder", () => {
-  let directory: string | undefined;
+  let directory: string;
+
+  beforeEach(async () => {
+    directory = join("tmp", "tests", "home", randomUUID());
+    await mkdir(directory, { recursive: true });
+  });
 
   afterEach(async () => {
-    if (directory) await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true });
   });
 
   it("appends one JSON line per record, creating a private file", async () => {
-    directory = await mkdtemp(join(tmpdir(), "usage-"));
     const path = join(directory, "nested", "usage.jsonl");
     const recordUsage = fileUsageRecorder({ path });
 
@@ -81,14 +116,20 @@ describe("fileUsageRecorder", () => {
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
-  it("drops a record it cannot write instead of throwing", async () => {
-    directory = await mkdtemp(join(tmpdir(), "usage-"));
-    // The parent is a file, so the directory cannot be created.
-    const recordUsage = fileUsageRecorder({ path: join(directory, "usage.jsonl", "x", "y") });
-    await import("node:fs/promises").then(({ writeFile }) =>
-      writeFile(join(directory ?? "", "usage.jsonl"), ""),
-    );
+  it("drops a record it cannot write, then recovers once the directory can be made", async () => {
+    // A file where the log directory should be makes mkdir fail.
+    const blocker = join(directory, "data");
+    await writeFile(blocker, "");
+    const path = join(blocker, "usage.jsonl");
+    const recordUsage = fileUsageRecorder({ path });
 
     expect(() => recordUsage(record)).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await rm(blocker);
+
+    recordUsage({ ...record, verdict: "allow" });
+    await vi.waitFor(async () => {
+      expect(JSON.parse(await readFile(path, "utf8")).verdict).toBe("allow");
+    });
   });
 });

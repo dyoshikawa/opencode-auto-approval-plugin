@@ -1,5 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -30,7 +30,8 @@ describe("stats command", () => {
   let file: string;
 
   beforeEach(async () => {
-    directory = await mkdtemp(join(tmpdir(), "stats-"));
+    directory = join("tmp", "tests", "home", randomUUID());
+    await mkdir(directory, { recursive: true });
     file = join(directory, "usage.jsonl");
     await writeFile(
       file,
@@ -49,10 +50,16 @@ describe("stats command", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  async function run(argv: string[]): Promise<{ code: number; output: string }> {
+  async function run(argv: string[]): Promise<{ code: number; output: string; error: string }> {
     let output = "";
-    const code = await main({ argv, now, write: (text) => (output += text) });
-    return { code, output };
+    let error = "";
+    const code = await main({
+      argv,
+      now,
+      write: (text) => (output += text),
+      writeError: (text) => (error += text),
+    });
+    return { code, output, error };
   }
 
   it("defaults to the current year and skips malformed lines", async () => {
@@ -84,15 +91,35 @@ describe("stats command", () => {
     expect(output).toContain("no decision model reviews in this range");
   });
 
+  it("reports an unreadable log on stderr", async () => {
+    const { code, output, error } = await run(["stats", "--file", directory]);
+
+    expect(code).toBe(1);
+    expect(output).toBe("");
+    expect(error).toContain("Cannot read the usage log");
+  });
+
+  it("sums the selected calendar year", async () => {
+    const { output } = await run(["stats", "--file", file, "--year", "2025", "--json"]);
+
+    expect(JSON.parse(output)).toMatchObject({ range: "2025", reviews: 1 });
+  });
+
   it.each([
     [["stats", "--days", "-1"]],
+    [["stats", "--days", ""]],
+    [["stats", "--days", "1e3"]],
+    [["stats", "--year", " "]],
+    [["stats", "--year", "0x7E7"]],
     [["stats", "--days", "1", "--all"]],
+    [["stats", "--days", "1", "--year", "2026"]],
     [["stats", "--bogus"]],
     [["report"]],
-  ])("rejects %j with the usage", async (argv) => {
-    const { code, output } = await run(argv);
+  ])("rejects %j with the usage on stderr", async (argv) => {
+    const { code, output, error } = await run(argv);
 
     expect(code).toBe(2);
-    expect(output).toContain("Usage: opencode-auto-approval-plugin stats");
+    expect(output).toBe("");
+    expect(error).toContain("Usage: opencode-auto-approval-plugin stats");
   });
 });

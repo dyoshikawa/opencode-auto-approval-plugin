@@ -9,15 +9,18 @@ import type { DecisionModelProvider } from "./config.js";
 
 /**
  * One line of the usage log: what a decision model review cost. It never holds
- * the operation, the prompt or the reason — only numbers and identifiers — so
- * the log is safe to keep and to share.
+ * the operation, the prompt or the reason — only numbers and identifiers.
  */
 export const usageRecordSchema = z.object({
   v: z.literal(1),
   time: z.string(),
   provider: z.string(),
   model: z.string(),
-  /** A hash of the project directory; `stats --project` hashes the same way. */
+  /**
+   * A hash of the project directory; `stats --project` hashes the same way. It
+   * keeps the path out of the file but is not a secret: a guessed path can be
+   * hashed and matched.
+   */
   project: z.string(),
   inputTokens: z.nullable(z.number()),
   outputTokens: z.nullable(z.number()),
@@ -48,11 +51,19 @@ const inputPricePerMillion: Record<DecisionModelProvider, (model: string) => num
   cloudflare: (model) => cloudflarePrices.get(model),
 };
 
+const officialEndpoints: Record<DecisionModelProvider, string> = {
+  typesafe: "https://api.typesafe.ai/",
+  cloudflare: "https://api.cloudflare.com/",
+};
+
+/** The cost at the published price; `null` when it is unknown, as for a self-hosted endpoint. */
 export function costUSD(input: {
   provider: DecisionModelProvider;
+  endpoint: string;
   model: string;
   inputTokens: number | null;
 }): number | null {
+  if (!input.endpoint.startsWith(officialEndpoints[input.provider])) return null;
   const price = inputPricePerMillion[input.provider](input.model);
   if (price === undefined || input.inputTokens === null) return null;
   return (input.inputTokens * price) / 1_000_000;
@@ -79,6 +90,9 @@ export function fileUsageRecorder(input: { path: string }): UsageRecorder {
     ready ??= mkdir(dirname(input.path), { recursive: true, mode: 0o700 });
     void ready
       .then(() => appendFile(input.path, `${JSON.stringify(record)}\n`, { mode: 0o600 }))
-      .catch(() => undefined);
+      .catch(() => {
+        // Retry the directory next time: it may have been removed or fixed.
+        ready = undefined;
+      });
   };
 }

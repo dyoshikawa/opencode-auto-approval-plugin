@@ -28,7 +28,7 @@ export type UsageStats = {
   models: ModelStats[];
 };
 
-/** Mirrors `opencode stats`: N days back from today (0 = today), a year, or everything. */
+/** Today and the N calendar days before it (0 = today only), a calendar year, or everything. */
 export function inRange(input: { record: UsageRecord; range: StatsRange; now: Date }): boolean {
   const time = new Date(input.record.time);
   if (Number.isNaN(time.getTime())) return false;
@@ -69,7 +69,9 @@ export function summarize(input: {
   for (const record of input.records) {
     verdicts[record.verdict] += 1;
     const key = `${record.provider}\u0000${record.model}`;
-    groups.set(key, [...(groups.get(key) ?? []), record]);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [record]);
+    else group.push(record);
   }
   const models = [...groups.values()]
     .map((records) => modelStats(records))
@@ -97,8 +99,15 @@ function modelStats(records: UsageRecord[]): ModelStats {
     outputTokens: sum(records.map((record) => record.outputTokens ?? 0)),
     costUSD: sum(records.map((record) => record.costUSD ?? 0)),
     unpriced: records.filter((record) => record.costUSD === null).length,
-    medianLatencyMs: latencies[Math.floor((latencies.length - 1) / 2)] ?? 0,
+    medianLatencyMs: median(latencies),
   };
+}
+
+/** The middle value of sorted numbers, averaging the two middle ones. */
+function median(sorted: number[]): number {
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[middle] ?? 0;
+  return ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2;
 }
 
 function sum(values: number[]): number {
@@ -114,8 +123,8 @@ export function formatStats(input: { stats: UsageStats; project?: string }): str
   const rows = [
     ["provider", "model", "reviews", "tokens in", "tokens out", "cost", "p50 latency"],
     ...stats.models.map((model) => [
-      model.provider,
-      model.model,
+      printable(model.provider),
+      printable(model.model),
       integer(model.reviews),
       tokens(model.inputTokens),
       tokens(model.outputTokens),
@@ -153,6 +162,14 @@ export function formatStats(input: { stats: UsageStats; project?: string }): str
     `verdicts  ${verdicts}${unpriced}`,
     "",
   ].join("\n");
+}
+
+/**
+ * The log may come from elsewhere (`--file`); a control character in a model
+ * name must not reach the terminal as an escape sequence.
+ */
+function printable(text: string): string {
+  return text.replace(/[\p{Cc}\p{Cf}]/gu, "?");
 }
 
 function integer(value: number): string {

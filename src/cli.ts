@@ -25,8 +25,11 @@ export async function main(input: {
   argv: string[];
   now?: Date;
   write?: (text: string) => void;
+  /** Errors and usage after a mistake, kept off stdout so `--json` stays parseable. */
+  writeError?: (text: string) => void;
 }): Promise<number> {
   const write = input.write ?? ((text: string) => process.stdout.write(text));
+  const writeError = input.writeError ?? ((text: string) => process.stderr.write(text));
   let parsed;
   try {
     parsed = parseArgs({
@@ -43,7 +46,7 @@ export async function main(input: {
       },
     });
   } catch (error) {
-    write(`${error instanceof Error ? error.message : String(error)}\n\n${usage}`);
+    writeError(`${error instanceof Error ? error.message : String(error)}\n\n${usage}`);
     return 2;
   }
   const { values, positionals } = parsed;
@@ -52,19 +55,28 @@ export async function main(input: {
     return 0;
   }
   if (positionals.length !== 1 || positionals[0] !== "stats") {
-    write(usage);
+    writeError(usage);
     return 2;
   }
 
   const now = input.now ?? new Date();
   const range = statsRange({ values, now });
   if (typeof range === "string") {
-    write(`${range}\n\n${usage}`);
+    writeError(`${range}\n\n${usage}`);
     return 2;
   }
   const project =
     values.project === undefined ? undefined : projectID({ directory: values.project });
-  const records = (await readUsageLog({ path: values.file ?? usageLogPath() })).filter(
+  const path = values.file ?? usageLogPath();
+  let log: UsageRecord[];
+  try {
+    log = await readUsageLog({ path });
+  } catch (error) {
+    const reason = error instanceof Error && "code" in error ? String(error.code) : "unreadable";
+    writeError(`Cannot read the usage log ${path} (${reason}).\n`);
+    return 1;
+  }
+  const records = log.filter(
     (record) =>
       inRange({ record, range, now }) && (project === undefined || record.project === project),
   );
@@ -87,16 +99,15 @@ function statsRange(input: {
   if (chosen.length > 1) return "Use only one of --days, --year and --all.";
   if (input.values.all) return { kind: "all" };
   if (input.values.days !== undefined) {
-    const days = Number(input.values.days);
-    return Number.isInteger(days) && days >= 0
-      ? { kind: "days", days }
+    return /^\d{1,5}$/.test(input.values.days)
+      ? { kind: "days", days: Number(input.values.days) }
       : "--days needs a whole number of days.";
   }
   if (input.values.year !== undefined) {
-    const year = Number(input.values.year);
-    return Number.isInteger(year) ? { kind: "year", year } : "--year needs a year.";
+    return /^\d{4}$/.test(input.values.year)
+      ? { kind: "year", year: Number(input.values.year) }
+      : "--year needs a four-digit year.";
   }
-  // `opencode stats` defaults to the current year so far.
   return { kind: "year", year: input.now.getFullYear() };
 }
 

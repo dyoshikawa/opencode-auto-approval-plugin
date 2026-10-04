@@ -465,4 +465,30 @@ describe("DecisionModelReviewer usage records", () => {
 
     await expect(reviewer.review(request)).resolves.toMatchObject({ verdict: "deny" });
   });
+
+  it("reads the tokens from inside the Workers AI envelope", async () => {
+    const records: UsageRecord[] = [];
+    const reviewer = new DecisionModelReviewer({
+      configuration: parsePluginConfiguration({
+        options: {
+          reviewer: { backend: "decision-model", decisionModel: { provider: "cloudflare" } },
+        },
+        env: {
+          CLOUDFLARE_API_TOKEN: "cf-token",
+          CLOUDFLARE_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
+        },
+      }),
+      fetch: vi.fn<typeof globalThis.fetch>(async () =>
+        envelope({ choice: "deny", probabilities: { allow: 0.01, deny: 0.97, escalate: 0.02 } }),
+      ),
+      recordUsage: (record) => records.push(record),
+    });
+
+    await reviewer.review(request);
+
+    expect(records).toMatchObject([
+      { provider: "cloudflare", model: "clef", inputTokens: 219, outputTokens: 0, verdict: "deny" },
+    ]);
+    expect(records[0]?.costUSD).toBeCloseTo((219 * 0.24) / 1_000_000, 12);
+  });
 });

@@ -179,7 +179,11 @@ function decisionModelConfiguration(input: {
         'Invalid auto-approval plugin options: reviewer.decisionModel needs reviewer.backend "decision-model"; "jev" reads reviewer.jev.',
       );
     }
-    const jev = parseOptions({ schema: typeSafeOptionsSchema, value: reviewer.jev ?? {} });
+    const jev = parseOptions({
+      schema: typeSafeOptionsSchema,
+      value: reviewer.jev ?? {},
+      prefix: "reviewer.jev",
+    });
     return typeSafeConfiguration({
       options: { provider: "typesafe", ...jev },
       env: input.env,
@@ -199,6 +203,7 @@ function decisionModelConfiguration(input: {
   const options = parseOptions({
     schema: decisionModelOptionsSchema,
     value: reviewer.decisionModel,
+    prefix: "reviewer.decisionModel",
   });
   return options.provider === "typesafe"
     ? typeSafeConfiguration({ options, env: input.env, prefix: "reviewer.decisionModel" })
@@ -319,10 +324,13 @@ function typeSafeEndpoint(baseURL: string): string {
   return new URL("/v1/systemone", url).href;
 }
 
-function parseOptions<T>(input: { schema: z.ZodMiniType<T>; value: unknown }): T {
+/** Parses a nested options object, naming where it sits in the plugin options. */
+function parseOptions<T>(input: { schema: z.ZodMiniType<T>; value: unknown; prefix: string }): T {
   const result = z.safeParse(input.schema, input.value);
   if (!result.success) {
-    throw new Error(`Invalid auto-approval plugin options: ${result.error.message}`);
+    throw new Error(
+      `Invalid auto-approval plugin options: ${input.prefix}: ${result.error.message}`,
+    );
   }
   return result.data;
 }

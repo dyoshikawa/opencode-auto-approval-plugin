@@ -128,7 +128,7 @@ export class DecisionModelReviewer implements Reviewer {
     verdict: ReviewVerdict["verdict"] | "error";
   }): void {
     if (this.#recordUsage === undefined) return;
-    const { provider, model } = this.#configuration;
+    const { provider, model, endpoint } = this.#configuration;
     try {
       this.#recordUsage({
         v: 1,
@@ -140,7 +140,7 @@ export class DecisionModelReviewer implements Reviewer {
         outputTokens: input.tokens.output,
         latencyMs: Date.now() - input.startedAt,
         verdict: input.verdict,
-        costUSD: costUSD({ provider, model, inputTokens: input.tokens.input }),
+        costUSD: costUSD({ provider, endpoint, model, inputTokens: input.tokens.input }),
       });
     } catch {
       // The usage log must never decide a review.

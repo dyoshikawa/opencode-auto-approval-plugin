@@ -76,6 +76,7 @@ describe("summarize", () => {
       stats.models.map((model) => [model.model, model.reviews, model.medianLatencyMs]),
     ).toEqual([
       ["jev-latest", 3, 200],
+      // The median of two latencies is their mean.
       ["clef", 2, 200],
     ]);
   });
@@ -101,5 +102,28 @@ describe("summarize", () => {
     ).toBe(
       "auto-approval stats · today · this project\n\nno decision model reviews in this range\n",
     );
+  });
+
+  it("never prints control characters from a model name", () => {
+    const text = formatStats({
+      stats: summarize({
+        records: [record({ time: now, model: "jev\u001b]0;pwned\u0007" })],
+        range: { kind: "all" },
+        now,
+      }),
+    });
+
+    expect(text.includes("\u001b") || text.includes("\u0007")).toBe(false);
+    expect(text).toContain("jev?]0;pwned?");
+  });
+
+  it("handles a large log in linear time", () => {
+    const many = Array.from({ length: 200_000 }, (_, index) =>
+      record({ time: now, latencyMs: index }),
+    );
+    const started = performance.now();
+
+    expect(summarize({ records: many, range: { kind: "all" }, now }).reviews).toBe(200_000);
+    expect(performance.now() - started).toBeLessThan(2_000);
   });
 });

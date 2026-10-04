@@ -213,14 +213,16 @@ Each decision model review appends one line to a usage log at
 is unset): the time, provider, model, a hash of the project directory, input and output tokens,
 latency, the verdict (`error` for a failed call), and the cost at the time of the review. The
 operation, your prompt and the reason are never written, and the file is created readable by you
-only. Reviews with the `opencode` backend run in OpenCode sessions, so `opencode stats` already
+only. The project hash keeps the path out of the file but is not a secret — anyone who guesses a
+path can hash it and match it — so treat the log as private before sharing it. Reviews with the `opencode` backend run in OpenCode sessions, so `opencode stats` already
 counts them.
 
-Show the totals with the bundled command, whose flags follow `opencode stats`:
+Show the totals with the bundled command, modelled on `opencode stats`:
 
 ```sh
-npx opencode-auto-approval-plugin stats              # this year so far
-npx opencode-auto-approval-plugin stats --days 7     # the last 7 days (0 = today)
+npx opencode-auto-approval-plugin stats              # this calendar year so far
+npx opencode-auto-approval-plugin stats --days 7     # today and the 7 calendar days before it (0 = today)
+npx opencode-auto-approval-plugin stats --year 2026
 npx opencode-auto-approval-plugin stats --all --project . --json
 ```
 
@@ -230,15 +232,16 @@ auto-approval stats · last 7 days · all projects
 reviews 1,284   tokens 612k in / 51k out   cost $0.11
 
 provider    model       reviews  tokens in  tokens out      cost  p50 latency
-cloudflare  clef            904       431k           0  $0.10       412 ms
-typesafe    jev-latest      380       181k         51k  $0.00760    212 ms
+cloudflare  clef            904       431k           0     $0.10       412 ms
+typesafe    jev-latest      380       181k         51k  $0.00760       212 ms
 
 verdicts  allow 81% · escalate 15% · deny 3% · error 1%
 ```
 
 - Costs use the input prices published on 2026-10-04 (USD per million tokens: Jev $0.042, Clef
-  $0.24, Clef-flash $0.09; output tokens are free). A model without a known price is counted but
-  left out of the cost, and the summary says how many reviews that was.
+  $0.24, Clef-flash $0.09; output tokens are free) and apply to the official endpoints only. A
+  model without a known price, or a review sent to a custom `baseURL`, is counted but left out of
+  the cost, and the summary says how many reviews that was. The latency column is the median.
 - Set `reviewer.recordUsage` to `false` to stop writing the log. A failure to write it never
   affects a review.
 
