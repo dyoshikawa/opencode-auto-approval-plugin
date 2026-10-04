@@ -30,7 +30,7 @@ describe("plugin entrypoint", () => {
     expect(createReviewer).toHaveBeenCalledTimes(2);
   });
 
-  it("reviews through the Jev API when the jev backend is configured", async () => {
+  it("reviews through the decision model API when that backend is configured", async () => {
     const hooks: Record<string, (event: Record<string, unknown>) => Promise<void>> = {};
     const registration = { dispose: async () => undefined };
     const register = async (
@@ -50,7 +50,10 @@ describe("plugin entrypoint", () => {
       await plugin.setup({
         options: {
           mode: "all-tools",
-          reviewer: { backend: "jev", jev: { apiKey: "test-key" } },
+          reviewer: {
+            backend: "decision-model",
+            decisionModel: { provider: "typesafe", apiKey: "test-key" },
+          },
         },
         location: { directory: "/workspace" },
         session,
@@ -61,7 +64,7 @@ describe("plugin entrypoint", () => {
 
       await expect(
         hooks["execute.before"]?.({ sessionID: "s", tool: "bash", input: { command: "rm -rf /" } }),
-      ).rejects.toThrow("Auto-approval reviewer denied: Jev chose deny");
+      ).rejects.toThrow("Auto-approval reviewer denied: jev-latest chose deny");
     } finally {
       vi.unstubAllGlobals();
     }

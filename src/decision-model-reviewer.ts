@@ -1,13 +1,14 @@
 import * as z from "zod/mini";
 
-import type { JevConfiguration, PluginConfiguration } from "./config.js";
+import type { DecisionModelConfiguration, PluginConfiguration } from "./config.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import { sanitizeReason, userInstructionsPreamble } from "./reviewer.js";
 
 /**
- * Reviews operations through TypeSafe AI's System One decision API (Jev): one
- * HTTP call with the operation as `state` and a single Choice question. No
- * opencode session is opened, so the reviewer never inspects the workspace.
+ * Reviews operations through a System One compatible decision model — TypeSafe
+ * AI's Jev or Cloudflare's Clef on Workers AI: one HTTP call with the
+ * operation as `state` and a single Choice question. No opencode session is
+ * opened, so the reviewer never inspects the workspace.
  */
 
 type Fetch = typeof globalThis.fetch;
@@ -15,11 +16,11 @@ type Fetch = typeof globalThis.fetch;
 const verdicts = ["allow", "deny", "escalate"] as const;
 
 /**
- * The API refuses a state beyond its token limit (a 200 KB edit answered
- * `max_tokens_exceeded`; 80,000 characters of state were accepted as 32k
- * tokens), and a large state is billed in full, so the resource and the
- * intent are cut to a preview. Both limits count characters as encoded in the
- * request body.
+ * The APIs refuse a state beyond their token limit (Jev answered a 200 KB edit
+ * with `max_tokens_exceeded` and accepted 80,000 characters as 32k tokens;
+ * Clef allows 64k tokens), and a large state is billed in full, so the
+ * resource and the intent are cut to a preview. Both limits count characters
+ * as encoded in the request body.
  */
 const MAX_RESOURCE_CHARS = 64_000;
 
@@ -38,7 +39,7 @@ const verdictCriteria = {
   escalate: "A human should confirm: risky, ambiguous, or the intent is unknown.",
 } as const;
 
-// The policy lives in `instructions`: Jev follows guidance there, while text in
+// The policy lives in `instructions`: the model follows guidance there, while text in
 // the state is data it judges. The user's own instructions therefore go there
 // too, never into the state.
 function verdictQuestion(input: { instructions?: string }) {
@@ -62,18 +63,21 @@ const answerSchema = z.object({
   }),
 });
 
-export class JevReviewer implements Reviewer {
-  readonly #configuration: JevConfiguration;
+/** Workers AI wraps every answer in its API envelope. */
+const cloudflareEnvelopeSchema = z.object({ result: z.unknown() });
+
+export class DecisionModelReviewer implements Reviewer {
+  readonly #configuration: DecisionModelConfiguration;
   readonly #timeoutMs: number;
   readonly #instructions: string | undefined;
   readonly #fetch: Fetch;
 
   constructor(input: { configuration: PluginConfiguration; fetch?: Fetch }) {
-    const jev = input.configuration.reviewer.jev;
-    if (jev === undefined) {
-      throw new Error("The jev reviewer backend is not configured.");
+    const decisionModel = input.configuration.reviewer.decisionModel;
+    if (decisionModel === undefined) {
+      throw new Error("The decision-model reviewer backend is not configured.");
     }
-    this.#configuration = jev;
+    this.#configuration = decisionModel;
     this.#timeoutMs = input.configuration.reviewer.timeoutMs;
     this.#instructions = input.configuration.reviewer.instructions;
     this.#fetch = input.fetch ?? globalThis.fetch;
@@ -127,25 +131,29 @@ export class JevReviewer implements Reviewer {
       });
     } catch (error) {
       // Network errors may echo the URL; the message stays generic.
-      throw new Error("Jev request failed.", { cause: error });
+      throw new Error("Decision model request failed.", { cause: error });
     }
 
     if (!response.ok) {
       // 402 means the account is out of credit, 429 rate limited, 5xx an outage.
       await response.body?.cancel().catch(() => undefined);
-      throw new Error(`Jev request failed with HTTP ${response.status}.`);
+      throw new Error(`Decision model request failed with HTTP ${response.status}.`);
     }
+    let body: unknown;
     try {
-      return await response.json();
+      body = await response.json();
     } catch (error) {
-      throw new Error("Jev response was not JSON.", { cause: error });
+      throw new Error("Decision model response was not JSON.", { cause: error });
     }
+    if (this.#configuration.provider !== "cloudflare") return body;
+    const envelope = z.safeParse(cloudflareEnvelopeSchema, body);
+    return envelope.success ? envelope.data.result : undefined;
   }
 
   #verdict(input: { answer: unknown; truncated: boolean }): ReviewVerdict {
     const result = z.safeParse(answerSchema, input.answer);
     if (!result.success) {
-      throw new Error("Jev response did not match the verdict schema.");
+      throw new Error("Decision model response did not match the verdict schema.");
     }
 
     const answer = result.data.answers.verdict;
@@ -160,13 +168,14 @@ export class JevReviewer implements Reviewer {
           .join(", ")
       : `confidence ${probability.toFixed(2)}`;
 
-    // Jev always picks an option; a hesitant allow is not an approval.
+    // The model always picks an option; a hesitant allow is not an approval.
     const threshold = this.#configuration.minAllowProbability;
+    const model = this.#configuration.model;
     if (answer.choice === "allow" && probability < threshold) {
       return {
         verdict: "escalate",
         reason: sanitizeReason(
-          `Jev leaned allow at ${probability.toFixed(2)}, below the ${threshold.toFixed(2)} threshold (${summary}).`,
+          `${model} leaned allow at ${probability.toFixed(2)}, below the ${threshold.toFixed(2)} threshold (${summary}).`,
         ),
       };
     }
@@ -174,18 +183,18 @@ export class JevReviewer implements Reviewer {
       return {
         verdict: "escalate",
         reason: sanitizeReason(
-          `Jev chose allow but saw only part of an oversized operation or request (${summary}).`,
+          `${model} chose allow but saw only part of an oversized operation or request (${summary}).`,
         ),
       };
     }
     return {
       verdict: answer.choice,
-      reason: sanitizeReason(`Jev chose ${answer.choice} (${summary}).`),
+      reason: sanitizeReason(`${model} chose ${answer.choice} (${summary}).`),
     };
   }
 }
 
-/** The state sent to Jev, and whether any of it had to be cut to fit. */
+/** The state sent to the model, and whether any of it had to be cut to fit. */
 function reviewState(input: ReviewRequest): {
   state: Record<string, unknown>;
   truncated: boolean;

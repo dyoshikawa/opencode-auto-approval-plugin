@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { parsePluginConfiguration } from "./config.js";
-import { JevReviewer } from "./jev-reviewer.js";
+import { DecisionModelReviewer } from "./decision-model-reviewer.js";
 import { type ReviewRequest, userInstructionsPreamble } from "./reviewer.js";
 
 const request: ReviewRequest = {
@@ -18,10 +18,10 @@ function configuration(
   return parsePluginConfiguration({
     options: {
       reviewer: {
-        backend: "jev",
+        backend: "decision-model",
         timeoutMs: input.timeoutMs ?? 30_000,
         instructions: input.instructions,
-        jev: { minAllowProbability: input.minAllowProbability },
+        decisionModel: { provider: "typesafe", minAllowProbability: input.minAllowProbability },
       },
     },
     env: { TYPESAFE_API_KEY: "test-key" },
@@ -50,11 +50,11 @@ function reviewerWith(input: {
   instructions?: string[];
 }) {
   const fetch = vi.fn<typeof globalThis.fetch>(input.response);
-  const reviewer = new JevReviewer({ configuration: configuration(input), fetch });
+  const reviewer = new DecisionModelReviewer({ configuration: configuration(input), fetch });
   return { reviewer, fetch };
 }
 
-describe("JevReviewer", () => {
+describe("DecisionModelReviewer", () => {
   it("adds configured instructions to the question, not to the state", async () => {
     const { reviewer, fetch } = reviewerWith({
       response: async () => answer({ choice: "allow" }),
@@ -87,7 +87,7 @@ describe("JevReviewer", () => {
 
     await expect(reviewer.review(request)).resolves.toEqual({
       verdict: "allow",
-      reason: "Jev chose allow (allow 0.97, deny 0.00, escalate 0.00).",
+      reason: "jev-latest chose allow (allow 0.97, deny 0.00, escalate 0.00).",
     });
 
     const [url, init] = fetch.mock.calls[0] ?? [];
@@ -125,7 +125,7 @@ describe("JevReviewer", () => {
     await expect(reviewer.review(request)).resolves.toEqual({
       verdict: "escalate",
       reason:
-        "Jev leaned allow at 0.45, below the 0.60 threshold (allow 0.45, deny 0.15, escalate 0.40).",
+        "jev-latest leaned allow at 0.45, below the 0.60 threshold (allow 0.45, deny 0.15, escalate 0.40).",
     });
   });
 
@@ -193,7 +193,7 @@ describe("JevReviewer", () => {
 
     await expect(reviewer.review(request)).resolves.toEqual({
       verdict: "escalate",
-      reason: "Jev leaned allow at 0.50, below the 0.60 threshold (confidence 0.50).",
+      reason: "jev-latest leaned allow at 0.50, below the 0.60 threshold (confidence 0.50).",
     });
   });
 
@@ -242,7 +242,9 @@ describe("JevReviewer", () => {
       response: async () => new Response("secret detail", { status: 402 }),
     });
 
-    await expect(reviewer.review(request)).rejects.toThrow("Jev request failed with HTTP 402.");
+    await expect(reviewer.review(request)).rejects.toThrow(
+      "Decision model request failed with HTTP 402.",
+    );
   });
 
   it("keeps a network error generic", async () => {
@@ -252,7 +254,7 @@ describe("JevReviewer", () => {
       },
     });
 
-    await expect(reviewer.review(request)).rejects.toThrow(/^Jev request failed\.$/);
+    await expect(reviewer.review(request)).rejects.toThrow(/^Decision model request failed\.$/);
   });
 
   it("rejects an answer outside the verdict schema", async () => {
@@ -264,7 +266,7 @@ describe("JevReviewer", () => {
   it("rejects a body that is not JSON", async () => {
     const { reviewer } = reviewerWith({ response: async () => new Response("<html>") });
 
-    await expect(reviewer.review(request)).rejects.toThrow("Jev response was not JSON.");
+    await expect(reviewer.review(request)).rejects.toThrow("Decision model response was not JSON.");
   });
 
   it("times out while waiting for the response", async () => {
@@ -297,5 +299,111 @@ describe("JevReviewer", () => {
     const { reviewer } = reviewerWith({ response: async () => answer({ choice: "allow" }) });
 
     expect(reviewer.isReviewerSession()).toBe(false);
+  });
+});
+
+// Recorded from Workers AI on 2026-10-04: the System One answer arrives
+// inside the Cloudflare API envelope.
+function envelope(input: { choice: string; probabilities: Record<string, number> }) {
+  return Response.json({
+    result: {
+      model: "clef-flash",
+      answers: {
+        verdict: {
+          type: "choice",
+          choice: input.choice,
+          probabilities: input.probabilities,
+          confidence: 0.82,
+        },
+      },
+      usage: { input_tokens: 219, output_tokens: 0 },
+    },
+    success: true,
+    errors: [],
+    messages: [],
+  });
+}
+
+describe("DecisionModelReviewer with Cloudflare Workers AI", () => {
+  const accountId = "0123456789abcdef0123456789abcdef";
+
+  function cloudflareReviewer(input: { response: () => Promise<Response>; model?: string }) {
+    const fetch = vi.fn<typeof globalThis.fetch>(input.response);
+    const reviewer = new DecisionModelReviewer({
+      configuration: parsePluginConfiguration({
+        options: {
+          reviewer: {
+            backend: "decision-model",
+            decisionModel: { provider: "cloudflare", model: input.model },
+          },
+        },
+        env: { CLOUDFLARE_API_TOKEN: "cf-token", CLOUDFLARE_ACCOUNT_ID: accountId },
+      }),
+      fetch,
+    });
+    return { reviewer, fetch };
+  }
+
+  it("posts the same question to the account's Workers AI model and unwraps the envelope", async () => {
+    const { reviewer, fetch } = cloudflareReviewer({
+      model: "clef-flash",
+      response: async () =>
+        envelope({
+          choice: "deny",
+          probabilities: { allow: 0.0159, deny: 0.9377, escalate: 0.0464 },
+        }),
+    });
+
+    await expect(reviewer.review(request)).resolves.toEqual({
+      verdict: "deny",
+      reason: "clef-flash chose deny (allow 0.02, deny 0.94, escalate 0.05).",
+    });
+
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/cloudflare/clef-flash`,
+    );
+    expect(init).toMatchObject({
+      redirect: "error",
+      headers: { authorization: "Bearer cf-token" },
+    });
+    const body = JSON.parse(String(init?.body));
+    expect(body.model).toBe("clef-flash");
+    expect(Object.keys(body.questions)).toEqual(["verdict"]);
+  });
+
+  it("uses the configured Clef model in the URL, the body and the reason", async () => {
+    const { reviewer, fetch } = cloudflareReviewer({
+      model: "clef",
+      response: async () =>
+        envelope({ choice: "allow", probabilities: { allow: 0.97, deny: 0.01, escalate: 0.02 } }),
+    });
+
+    await expect(reviewer.review(request)).resolves.toMatchObject({
+      verdict: "allow",
+      reason: "clef chose allow (allow 0.97, deny 0.01, escalate 0.02).",
+    });
+    expect(String(fetch.mock.calls[0]?.[0])).toMatch(/\/ai\/run\/@cf\/cloudflare\/clef$/);
+  });
+
+  it("fails on an unsuccessful envelope", async () => {
+    const { reviewer } = cloudflareReviewer({
+      response: async () =>
+        Response.json({ result: null, success: false, errors: [{ code: 5007 }], messages: [] }),
+    });
+
+    await expect(reviewer.review(request)).rejects.toThrow(
+      "Decision model response did not match the verdict schema.",
+    );
+  });
+
+  it("does not accept a bare System One answer from Workers AI", async () => {
+    const { reviewer } = cloudflareReviewer({
+      response: async () => answer({ choice: "allow" }),
+    });
+
+    await expect(reviewer.review(request)).rejects.toThrow(
+      "Decision model response did not match the verdict schema.",
+    );
   });
 });

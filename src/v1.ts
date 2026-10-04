@@ -121,7 +121,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
 
     return {
       config: async (config) => {
-        // The Jev backend needs no reviewer agent.
+        // The decision-model backend needs no reviewer agent.
         if (configuration.reviewer.backend !== "opencode") return;
         config.agent ??= {};
         config.agent[reviewerAgentName] = reviewerAgentConfig();
