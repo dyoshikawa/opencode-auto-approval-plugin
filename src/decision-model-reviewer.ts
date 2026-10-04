@@ -3,6 +3,7 @@ import * as z from "zod/mini";
 import type { DecisionModelConfiguration, PluginConfiguration } from "./config.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import { sanitizeReason, userInstructionsPreamble } from "./reviewer.js";
+import { costUSD, type UsageRecorder } from "./usage.js";
 
 /**
  * Reviews operations through a System One compatible decision model — TypeSafe
@@ -63,6 +64,15 @@ const answerSchema = z.object({
   }),
 });
 
+const usageSchema = z.object({
+  usage: z.optional(
+    z.object({
+      input_tokens: z.optional(z.nullable(z.number())),
+      output_tokens: z.optional(z.nullable(z.number())),
+    }),
+  ),
+});
+
 /** Workers AI wraps every answer in its API envelope. */
 const cloudflareEnvelopeSchema = z.object({ result: z.unknown() });
 
@@ -71,8 +81,17 @@ export class DecisionModelReviewer implements Reviewer {
   readonly #timeoutMs: number;
   readonly #instructions: string | undefined;
   readonly #fetch: Fetch;
+  readonly #recordUsage: UsageRecorder | undefined;
+  readonly #project: string;
 
-  constructor(input: { configuration: PluginConfiguration; fetch?: Fetch }) {
+  constructor(input: {
+    configuration: PluginConfiguration;
+    fetch?: Fetch;
+    /** Called once per review, successful or not, with what it cost. */
+    recordUsage?: UsageRecorder;
+    /** The project the reviews belong to, as recorded in the usage log. */
+    project?: string;
+  }) {
     const decisionModel = input.configuration.reviewer.decisionModel;
     if (decisionModel === undefined) {
       throw new Error("The decision-model reviewer backend is not configured.");
@@ -81,6 +100,8 @@ export class DecisionModelReviewer implements Reviewer {
     this.#timeoutMs = input.configuration.reviewer.timeoutMs;
     this.#instructions = input.configuration.reviewer.instructions;
     this.#fetch = input.fetch ?? globalThis.fetch;
+    this.#recordUsage = input.recordUsage;
+    this.#project = input.project ?? "";
   }
 
   isReviewerSession(): boolean {
@@ -88,6 +109,48 @@ export class DecisionModelReviewer implements Reviewer {
   }
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
+    const startedAt = Date.now();
+    const tokens = { input: null as number | null, output: null as number | null };
+    try {
+      const decision = await this.#review({ request: input, tokens });
+      this.#record({ startedAt, tokens, verdict: decision.verdict });
+      return decision;
+    } catch (error) {
+      // A failed call may still be billed (a timeout after the model ran).
+      this.#record({ startedAt, tokens, verdict: "error" });
+      throw error;
+    }
+  }
+
+  #record(input: {
+    startedAt: number;
+    tokens: { input: number | null; output: number | null };
+    verdict: ReviewVerdict["verdict"] | "error";
+  }): void {
+    if (this.#recordUsage === undefined) return;
+    const { provider, model, endpoint } = this.#configuration;
+    try {
+      this.#recordUsage({
+        v: 1,
+        time: new Date(input.startedAt).toISOString(),
+        provider,
+        model,
+        project: this.#project,
+        inputTokens: input.tokens.input,
+        outputTokens: input.tokens.output,
+        latencyMs: Date.now() - input.startedAt,
+        verdict: input.verdict,
+        costUSD: costUSD({ provider, endpoint, model, inputTokens: input.tokens.input }),
+      });
+    } catch {
+      // The usage log must never decide a review.
+    }
+  }
+
+  async #review(input: {
+    request: ReviewRequest;
+    tokens: { input: number | null; output: number | null };
+  }): Promise<ReviewVerdict> {
     const controller = new AbortController();
     // Racing the abort as well as passing the signal keeps the deadline even
     // when a fetch implementation does not honour the signal.
@@ -97,11 +160,16 @@ export class DecisionModelReviewer implements Reviewer {
     const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
     try {
       // The timeout covers the body as well as the headers.
-      const { state, truncated } = reviewState(input);
+      const { state, truncated } = reviewState(input.request);
       const body = await Promise.race([
         this.#request({ state, signal: controller.signal }),
         timedOut,
       ]);
+      const usage = z.safeParse(usageSchema, body);
+      if (usage.success) {
+        input.tokens.input = usage.data.usage?.input_tokens ?? null;
+        input.tokens.output = usage.data.usage?.output_tokens ?? null;
+      }
       return this.#verdict({ answer: body, truncated });
     } catch (error) {
       if (controller.signal.aborted) throw new Error("Reviewer timed out.", { cause: error });

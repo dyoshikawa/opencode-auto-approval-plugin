@@ -5,6 +5,8 @@ export type PluginDependencies = {
   createReviewer(input: {
     client: ReviewSessionClient;
     configuration: PluginConfiguration;
+    /** The project directory OpenCode loaded the plugin for. */
+    directory: string;
   }): Reviewer;
 };
 

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { parsePluginConfiguration } from "./config.js";
 import { DecisionModelReviewer } from "./decision-model-reviewer.js";
 import { type ReviewRequest, userInstructionsPreamble } from "./reviewer.js";
+import type { UsageRecord } from "./usage.js";
 
 const request: ReviewRequest = {
   source: "permission-request",
@@ -405,5 +406,89 @@ describe("DecisionModelReviewer with Cloudflare Workers AI", () => {
     await expect(reviewer.review(request)).rejects.toThrow(
       "Decision model response did not match the verdict schema.",
     );
+  });
+});
+
+describe("DecisionModelReviewer usage records", () => {
+  function recordingReviewer(input: { response: () => Promise<Response> }) {
+    const records: UsageRecord[] = [];
+    const reviewer = new DecisionModelReviewer({
+      configuration: configuration(),
+      fetch: vi.fn<typeof globalThis.fetch>(input.response),
+      recordUsage: (record) => records.push(record),
+      project: "project-id",
+    });
+    return { reviewer, records };
+  }
+
+  it("records the tokens, the cost and the final verdict of a review", async () => {
+    const { reviewer, records } = recordingReviewer({
+      response: async () => answer({ choice: "allow", probabilities: { allow: 0.45 } }),
+    });
+
+    await reviewer.review(request);
+
+    expect(records).toEqual([
+      {
+        v: 1,
+        time: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        provider: "typesafe",
+        model: "jev-latest",
+        project: "project-id",
+        inputTokens: 465,
+        outputTokens: 41,
+        latencyMs: expect.any(Number),
+        // A hesitant allow is escalated, and the log says what was decided.
+        verdict: "escalate",
+        costUSD: (465 * 0.042) / 1_000_000,
+      },
+    ]);
+  });
+
+  it("records a failed review without tokens", async () => {
+    const { reviewer, records } = recordingReviewer({
+      response: async () => new Response("no", { status: 429 }),
+    });
+
+    await expect(reviewer.review(request)).rejects.toThrow("HTTP 429");
+    expect(records).toMatchObject([{ verdict: "error", inputTokens: null, costUSD: null }]);
+  });
+
+  it("keeps the review when recording throws", async () => {
+    const reviewer = new DecisionModelReviewer({
+      configuration: configuration(),
+      fetch: vi.fn<typeof globalThis.fetch>(async () => answer({ choice: "deny" })),
+      recordUsage: () => {
+        throw new Error("disk full");
+      },
+    });
+
+    await expect(reviewer.review(request)).resolves.toMatchObject({ verdict: "deny" });
+  });
+
+  it("reads the tokens from inside the Workers AI envelope", async () => {
+    const records: UsageRecord[] = [];
+    const reviewer = new DecisionModelReviewer({
+      configuration: parsePluginConfiguration({
+        options: {
+          reviewer: { backend: "decision-model", decisionModel: { provider: "cloudflare" } },
+        },
+        env: {
+          CLOUDFLARE_API_TOKEN: "cf-token",
+          CLOUDFLARE_ACCOUNT_ID: "0123456789abcdef0123456789abcdef",
+        },
+      }),
+      fetch: vi.fn<typeof globalThis.fetch>(async () =>
+        envelope({ choice: "deny", probabilities: { allow: 0.01, deny: 0.97, escalate: 0.02 } }),
+      ),
+      recordUsage: (record) => records.push(record),
+    });
+
+    await reviewer.review(request);
+
+    expect(records).toMatchObject([
+      { provider: "cloudflare", model: "clef", inputTokens: 219, outputTokens: 0, verdict: "deny" },
+    ]);
+    expect(records[0]?.costUSD).toBeCloseTo((219 * 0.24) / 1_000_000, 12);
   });
 });

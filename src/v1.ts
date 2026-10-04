@@ -115,6 +115,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         directory: context.directory,
       }),
       configuration,
+      directory: context.directory,
     });
     const models = new Map<string, ModelReference>();
     const intents = new Map<string, string>();
