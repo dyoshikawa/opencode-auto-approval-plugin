@@ -161,10 +161,9 @@ same System One API:
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the
-  provider has no key (or, for Cloudflare, no valid account ID or model name) or an invalid
-  base URL. The
-  variables are read by the process that loads the plugin: if OpenCode 2.x's background service
-  was already running, run `opencode service restart` after exporting them.
+  provider has no key (or, for Cloudflare, no valid account ID or model name) or an invalid base
+  URL. The variables are read by the process that loads the plugin: if OpenCode 2.x's background
+  service was already running, run `opencode service restart` after exporting them.
 - `typesafe`: the key and the base URL come from the same place. With
   `reviewer.decisionModel.apiKey`, only `reviewer.decisionModel.baseURL` applies
   (`TYPESAFE_BASE_URL` is ignored); with `TYPESAFE_API_KEY`, only `TYPESAFE_BASE_URL` applies, and
@@ -204,7 +203,8 @@ same System One API:
   verdicts; pin a version for stable behavior.
 - Deprecated: `backend: "jev"` with `reviewer.jev` (`apiKey`, `baseURL`, `model`,
   `minAllowProbability`) from v0.3 still works and means `decision-model` with the `typesafe`
-  provider. Combining it with `reviewer.decisionModel` fails at startup.
+  provider. Combining it with `reviewer.decisionModel` fails at startup, and so does
+  `reviewer.jev` next to `backend: "decision-model"`.
 
 ### Usage and cost statistics
 
@@ -214,20 +214,20 @@ is unset): the time, provider, model, a hash of the project directory, input and
 latency, the verdict (`error` for a failed call), and the cost at the time of the review. The
 operation, your prompt and the reason are never written, and the file is created readable by you
 only. The project hash keeps the path out of the file but is not a secret — anyone who guesses a
-path can hash it and match it — so treat the log as private before sharing it. Reviews with the `opencode` backend run in OpenCode sessions, so `opencode stats` already
-counts them.
+path can hash it and match it — so treat the log as private before sharing it. Reviews with the
+`opencode` backend run in OpenCode sessions, so `opencode stats` already counts them.
 
 Show the totals with the bundled command, modelled on `opencode stats`:
 
 ```sh
 npx opencode-auto-approval-plugin stats              # this calendar year so far
-npx opencode-auto-approval-plugin stats --days 7     # today and the 7 calendar days before it (0 = today)
+npx opencode-auto-approval-plugin stats --days 7     # today and the 7 days before (0 = today)
 npx opencode-auto-approval-plugin stats --year 2026
 npx opencode-auto-approval-plugin stats --all --project . --json
 ```
 
 ```text
-auto-approval stats · last 7 days · all projects
+auto-approval stats · today and the 7 days before · all projects
 
 reviews 1,284   tokens 612k in / 51k out   cost $0.11
 
@@ -273,9 +273,9 @@ string.
 
 - Both backends receive the instructions as trusted guidance that takes precedence over the
   built-in safety guidance — though never over the answer format or the rule that operation data
-  is untrusted, so text inside a command or file cannot pose as your instructions: the `opencode` reviewer reads them in its prompt ahead of the operation
-  data, and the `decision-model` backend appends them to the question's `instructions`, never to the state
-  it judges.
+  is untrusted, so text inside a command or file cannot pose as your instructions: the `opencode`
+  reviewer reads them in its prompt ahead of the operation data, and the `decision-model` backend
+  appends them to the question's `instructions`, never to the state it judges.
 - They are guidance for an AI reviewer, not deterministic rules: the reviewer still sees the whole
   operation and may decide otherwise. Use OpenCode's own permission rules (`permissions` on 2.x,
   `permission` on 1.x) when a tool must always be allowed or denied. Explicit OpenCode `deny` rules still always win.
@@ -341,19 +341,19 @@ pnpm cicheck       # run everything CI runs
 
 ## Scripts
 
-| Script                 | Description                                               |
-| ---------------------- | --------------------------------------------------------- |
-| `pnpm build`           | Build ESM + CJS bundles and type declarations into `dist` |
-| `pnpm check`           | `fmt:check` + `oxlint` + `typecheck`                      |
-| `pnpm cicheck`         | `cicheck:code` + `cicheck:content` — what CI runs         |
-| `pnpm cicheck:code`    | `check` + `test`                                          |
-| `pnpm cicheck:content` | `cspell` + `secretlint`                                   |
-| `pnpm fix`             | Auto-fix formatting and lint problems                     |
-| `pnpm generate`        | Regenerate AI tool configs from `.rulesync/`              |
-| `pnpm knip`            | Report unused files, exports, and dependencies            |
-| `pnpm test`            | Run the test suite                                        |
-| `pnpm test:coverage`   | Run the test suite with coverage                          |
-| `pnpm typecheck`       | Type-check without emitting                               |
+| Script                 | Description                                                          |
+| ---------------------- | -------------------------------------------------------------------- |
+| `pnpm build`           | Build the library (ESM + CJS, types) and the `stats` bin into `dist` |
+| `pnpm check`           | `fmt:check` + `oxlint` + `typecheck`                                 |
+| `pnpm cicheck`         | `cicheck:code` + `cicheck:content` — what CI runs                    |
+| `pnpm cicheck:code`    | `check` + `test`                                                     |
+| `pnpm cicheck:content` | `cspell` + `secretlint`                                              |
+| `pnpm fix`             | Auto-fix formatting and lint problems                                |
+| `pnpm generate`        | Regenerate AI tool configs from `.rulesync/`                         |
+| `pnpm knip`            | Report unused files, exports, and dependencies                       |
+| `pnpm test`            | Run the test suite                                                   |
+| `pnpm test:coverage`   | Run the test suite with coverage                                     |
+| `pnpm typecheck`       | Type-check without emitting                                          |
 
 ## mise tasks
 

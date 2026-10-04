@@ -55,7 +55,10 @@ function describeRange(input: { range: StatsRange; now: Date }): string {
         ? `${input.range.year} so far`
         : String(input.range.year);
     case "days":
-      return input.range.days === 0 ? "today" : `last ${input.range.days} days`;
+      if (input.range.days === 0) return "today";
+      return input.range.days === 1
+        ? "today and yesterday"
+        : `today and the ${input.range.days} days before`;
   }
 }
 

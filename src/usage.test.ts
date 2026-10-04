@@ -124,12 +124,13 @@ describe("fileUsageRecorder", () => {
     const recordUsage = fileUsageRecorder({ path });
 
     expect(() => recordUsage(record)).not.toThrow();
-    await new Promise((resolve) => setTimeout(resolve, 50));
     await rm(blocker);
 
     recordUsage({ ...record, verdict: "allow" });
     await vi.waitFor(async () => {
-      expect(JSON.parse(await readFile(path, "utf8")).verdict).toBe("allow");
+      const lines = (await readFile(path, "utf8")).trim().split("\n");
+      // The first record may or may not have raced the removal; the second lands.
+      expect(lines.map((line) => JSON.parse(line).verdict).at(-1)).toBe("allow");
     });
   });
 });

@@ -64,7 +64,7 @@ describe("summarize", () => {
     const stats = summarize({ records, range: { kind: "days", days: 7 }, now });
 
     expect(stats).toMatchObject({
-      range: "last 7 days",
+      range: "today and the 7 days before",
       reviews: 5,
       inputTokens: 1_001_500,
       outputTokens: 120,

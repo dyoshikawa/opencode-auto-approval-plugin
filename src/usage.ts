@@ -22,12 +22,12 @@ export const usageRecordSchema = z.object({
    * hashed and matched.
    */
   project: z.string(),
-  inputTokens: z.nullable(z.number()),
-  outputTokens: z.nullable(z.number()),
-  latencyMs: z.number(),
+  inputTokens: z.nullable(z.int().check(z.gte(0))),
+  outputTokens: z.nullable(z.int().check(z.gte(0))),
+  latencyMs: z.number().check(z.gte(0), z.lte(86_400_000)),
   verdict: z.enum(["allow", "deny", "escalate", "error"]),
   /** Priced when the review ran; `null` for a model without a known price. */
-  costUSD: z.nullable(z.number()),
+  costUSD: z.nullable(z.number().check(z.gte(0), z.lte(1_000_000))),
 });
 
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
@@ -81,18 +81,25 @@ export function projectID(input: { directory: string }): string {
 
 /**
  * Appends to a JSON Lines file. Each record is one short `O_APPEND` write, so
- * concurrent OpenCode processes do not interleave lines. A failure to write is
- * dropped: the log is a convenience and must not block a review.
+ * concurrent OpenCode processes do not interleave lines, and one process
+ * writes its records in order. A failure to write is dropped: the log is a
+ * convenience and must not block a review.
  */
 export function fileUsageRecorder(input: { path: string }): UsageRecorder {
   let ready: Promise<unknown> | undefined;
+  // Writes are chained so lines land in the order the reviews finished.
+  let tail: Promise<void> = Promise.resolve();
   return (record) => {
-    ready ??= mkdir(dirname(input.path), { recursive: true, mode: 0o700 });
-    void ready
-      .then(() => appendFile(input.path, `${JSON.stringify(record)}\n`, { mode: 0o600 }))
-      .catch(() => {
+    const line = `${JSON.stringify(record)}\n`;
+    tail = tail.then(async () => {
+      try {
+        ready ??= mkdir(dirname(input.path), { recursive: true, mode: 0o700 });
+        await ready;
+        await appendFile(input.path, line, { mode: 0o600 });
+      } catch {
         // Retry the directory next time: it may have been removed or fixed.
         ready = undefined;
-      });
+      }
+    });
   };
 }
