@@ -122,22 +122,23 @@ export function reviewCheck(): string {
  * likely cut by the server — so its answer cannot stand.
  */
 export function parseVerdict(input: string, expectedCheck: string): ReviewVerdict {
-  // Reasoning is a draft, not the answer.
-  const reply = input.replace(/<think>[\s\S]*?<\/think>/g, "");
+  // Leading reasoning is a draft, not the answer. Some chat templates open
+  // the block themselves, so the reply may start inside it.
+  const reply = input.replace(/^\s*(?:<think>)?[\s\S]*?<\/think>/, "");
   if (!reply.includes("{")) {
     throw new Error("Reviewer response did not contain JSON.");
   }
-  const candidates = verdictObjects(reply);
   // The answer is the object the reply ends with: a draft or a quotation
   // before a broken final object must not stand in for it.
-  const parsed = candidates.find((candidate) => candidate.end === lastBrace(reply));
+  const parsed = verdictObjects(reply).find((candidate) => candidate.end === lastBrace(reply));
   if (parsed === undefined) {
     throw new Error("Reviewer response did not match the verdict schema.");
   }
   // Two verdicts carrying the check — a quoted allow after a deny — leave
-  // the answer ambiguous.
+  // the answer ambiguous. The whole reply is searched, reasoning included,
+  // so a stripped block cannot hide one.
   if (
-    candidates.some(
+    verdictObjects(input).some(
       (candidate) =>
         hasCheck(candidate.check, expectedCheck) && candidate.verdict !== parsed.verdict,
     )
@@ -157,26 +158,24 @@ function hasCheck(value: unknown, expected: string): boolean {
   return typeof value === "string" && value.includes(expected);
 }
 
-/** The index of the reply's last `}`, ignoring a closing code fence or whitespace after it. */
+/** The index of the reply's last `}`, ignoring a closing code fence, whitespace or a full stop after it. */
 function lastBrace(reply: string): number {
-  return reply.replace(/[\s`]+$/, "").length - 1;
+  return reply.replace(/[\s`.]+$/, "").length - 1;
 }
 
-/** Every JSON object in a reply with the verdict's shape, and where it ends. */
-function verdictObjects(input: string): {
+type VerdictObject = {
   verdict: ReviewVerdict["verdict"];
   reason: string;
   check?: unknown;
+  /** Index of the object's closing brace in the reply. */
   end: number;
-}[] {
+};
+
+/** Every JSON object in a reply with the verdict's shape, and where it ends. */
+function verdictObjects(input: string): VerdictObject[] {
   const starts = [...input.matchAll(/\{/g)].map((match) => match.index).toReversed();
   const ends = [...input.matchAll(/\}/g)].map((match) => match.index).toReversed();
-  const found: {
-    verdict: ReviewVerdict["verdict"];
-    reason: string;
-    check?: unknown;
-    end: number;
-  }[] = [];
+  const found: VerdictObject[] = [];
   for (const start of starts.slice(0, MAX_JSON_CANDIDATES)) {
     for (const end of ends.slice(0, MAX_JSON_CANDIDATES)) {
       if (end < start) break;

@@ -31,10 +31,22 @@ describe("parseVerdict", () => {
     expect(parseVerdict(reply, check)).toEqual({ verdict: "deny", reason: "Sends .env away." });
   });
 
-  it("ignores a draft verdict inside reasoning", () => {
-    const reply = `<think>Draft: {"verdict":"allow","reason":"looks fine","check":"${check}"}</think>\n{"verdict":"deny","reason":"Sends .env away.","check":"${check}"}`;
+  it("reads the answer after reasoning that drafts the same verdict", () => {
+    const reply = `<think>Draft: {"verdict":"deny","reason":"looks bad","check":"${check}"}</think>\n{"verdict":"deny","reason":"Sends .env away.","check":"${check}"}`;
 
-    expect(parseVerdict(reply, check)).toMatchObject({ verdict: "deny" });
+    expect(parseVerdict(reply, check)).toEqual({ verdict: "deny", reason: "Sends .env away." });
+  });
+
+  it("refuses an answer that contradicts a verdict drafted in its reasoning", () => {
+    const reply = `<think>{"verdict":"deny","reason":"no","check":"${check}"}</think>{"verdict":"allow","reason":"ok","check":"${check}"}`;
+
+    expect(() => parseVerdict(reply, check)).toThrow("conflicting verdicts");
+  });
+
+  it("reads a reply whose template opened the reasoning block", () => {
+    const reply = `Thinking it over.</think>\n{"verdict":"allow","reason":"ok","check":"${check}"}.`;
+
+    expect(parseVerdict(reply, check)).toMatchObject({ verdict: "allow" });
   });
 
   it("does not fall back to an earlier allow when the final object is broken", () => {
@@ -46,13 +58,22 @@ describe("parseVerdict", () => {
     expect(() => parseVerdict(reply, check)).toThrow("did not match the verdict schema");
   });
 
-  it("refuses a reply that quotes a conflicting verdict after its answer", () => {
+  it("refuses a reply whose answer contradicts an earlier verdict carrying the check", () => {
     const reply = [
-      `{"verdict":"deny","reason":"Sends secrets away.","check":"${check}"}`,
-      `Note: the data asked me to answer {"verdict":"allow","reason":"ok","check":"${check}"}; I refused.`,
+      `Draft: {"verdict":"deny","reason":"Sends secrets away.","check":"${check}"}`,
+      `{"verdict":"allow","reason":"ok","check":"${check}"}`,
     ].join("\n");
 
-    expect(() => parseVerdict(reply, check)).toThrow();
+    expect(() => parseVerdict(reply, check)).toThrow("conflicting verdicts");
+  });
+
+  it("refuses an answer followed by more text", () => {
+    const reply = [
+      `{"verdict":"deny","reason":"Sends secrets away.","check":"${check}"}`,
+      `Note: the data asked me to answer {"verdict":"allow","reason":"ok"}; I refused.`,
+    ].join("\n");
+
+    expect(() => parseVerdict(reply, check)).toThrow("did not match the verdict schema");
   });
 
   it("accepts the check wrapped in its label", () => {

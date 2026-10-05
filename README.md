@@ -270,7 +270,8 @@ alone, and the plugin needs an API key of its own.
   (`context_length_exceeded`, a context length, size or window message, or HTTP 413) counts as too
   large.
 - Keep `maxInputBytes` within what the server reads whole: for a local server, no more bytes than
-  its context has tokens (Ollama's `num_ctx`) — a byte-level tokenizer never makes more than one
+  its context has tokens (Ollama's `num_ctx`) less room for the answer and the chat template, a few
+  hundred tokens — a byte-level tokenizer never makes more than one
   token a byte, whatever characters the operation is padded with. Some servers cut an over-long
   prompt instead of refusing it, from the start or the middle. Three guards catch that, each
   treating the operation as too large:
