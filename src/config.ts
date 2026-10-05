@@ -139,6 +139,7 @@ export function parsePluginConfiguration(input: {
   }
 
   const reviewer = result.data.reviewer;
+  rejectMixedNames(reviewer);
   const backend: ReviewerBackend =
     reviewer?.backend === undefined ||
     reviewer.backend === "agent" ||
@@ -183,15 +184,29 @@ type ReviewerOptions = NonNullable<z.infer<typeof pluginConfigurationSchema>["re
 
 type DecisionOptions = z.infer<typeof decisionOptionsSchema>;
 
-/** `agent.model`, or the deprecated `reviewer.model`, but never both. */
+/**
+ * A key next to its deprecated name fails for every backend, so neither is
+ * silently ignored. Only pairs with a new key are checked: a configuration
+ * from an earlier version cannot contain one, so none of those start failing.
+ */
+function rejectMixedNames(reviewer: ReviewerOptions | undefined): void {
+  const pairs = [
+    ["agent", "model", "reviewer.agent.model"],
+    ["decision", "decisionModel", "reviewer.decision"],
+  ] as const;
+  for (const [current, deprecated, replacement] of pairs) {
+    if (reviewer?.[current] !== undefined && reviewer[deprecated] !== undefined) {
+      throw new Error(
+        `Invalid auto-approval plugin options: reviewer.${deprecated} is the deprecated name of ${replacement}; set only one.`,
+      );
+    }
+  }
+}
+
+/** `agent.model`, or the deprecated `reviewer.model`. */
 function agentConfiguration(
   reviewer: ReviewerOptions | undefined,
 ): PluginConfiguration["reviewer"]["agent"] {
-  if (reviewer?.agent !== undefined && reviewer.model !== undefined) {
-    throw new Error(
-      "Invalid auto-approval plugin options: reviewer.model is the deprecated name of reviewer.agent.model; set only one.",
-    );
-  }
   const model = reviewer?.agent?.model ?? reviewer?.model;
   return model === undefined ? {} : { model };
 }
@@ -226,11 +241,6 @@ function decisionConfiguration(input: {
   if (reviewer?.jev !== undefined) {
     throw new Error(
       'Invalid auto-approval plugin options: reviewer.jev is only read with the deprecated reviewer.backend "jev"; move it to reviewer.decision.',
-    );
-  }
-  if (reviewer?.decision !== undefined && reviewer.decisionModel !== undefined) {
-    throw new Error(
-      "Invalid auto-approval plugin options: reviewer.decisionModel is the deprecated name of reviewer.decision; set only one.",
     );
   }
   const prefix =

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { type ReviewRequest, userInstructionsPreamble } from "./agent-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
 import { DecisionReviewer } from "./decision-reviewer.js";
+import { type ReviewRequest, userInstructionsPreamble } from "./reviewer.js";
 import type { UsageRecord } from "./usage.js";
 
 const request: ReviewRequest = {

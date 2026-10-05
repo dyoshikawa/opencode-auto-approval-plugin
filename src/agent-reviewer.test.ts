@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  AgentReviewer,
-  type ReviewSessionClient,
-  userInstructionsPreamble,
-} from "./agent-reviewer.js";
+import { AgentReviewer } from "./agent-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
+import { type ReviewSessionClient, userInstructionsPreamble } from "./reviewer.js";
 
 type ReviewPrompt = Parameters<ReviewSessionClient["prompt"]>[0];
 type ReviewSessionOptions = Parameters<ReviewSessionClient["create"]>[0];

@@ -107,7 +107,7 @@ describe("parsePluginConfiguration", () => {
     });
   });
 
-  it("does not require decision model credentials for the opencode backend", () => {
+  it("does not require decision model credentials for the agent backend", () => {
     expect(
       parsePluginConfiguration({ options: { reviewer: { backend: "opencode" } }, env: {} })
         .reviewer,
@@ -385,16 +385,16 @@ describe("parsePluginConfiguration", () => {
   });
 
   describe("options of an unused backend", () => {
-    it("starts the opencode backend whatever reviewer.decisionModel holds", () => {
+    it("starts the agent backend whatever the decision options hold", () => {
       expect(
         parsePluginConfiguration({
-          options: { reviewer: { decision: { model: "clef" }, decisionModel: 1, jev: "x" } },
+          options: { reviewer: { decision: { model: "clef" }, jev: "x" } },
           env: {},
         }).reviewer.backend,
       ).toBe("agent");
     });
 
-    it("refuses reviewer.jev next to the decision-model backend", () => {
+    it("refuses reviewer.jev next to the decision backend", () => {
       expect(() =>
         parsePluginConfiguration({
           options: {
@@ -494,6 +494,77 @@ describe("parsePluginConfiguration", () => {
     });
   });
 
+  describe("mixing a name with its deprecated form", () => {
+    it.each([
+      [
+        "agent",
+        {
+          agent: { model: { providerID: "a", modelID: "b" } },
+          model: { providerID: "c", modelID: "d" },
+        },
+      ],
+      [
+        "decision",
+        {
+          agent: { model: { providerID: "a", modelID: "b" } },
+          model: { providerID: "c", modelID: "d" },
+        },
+      ],
+    ])("refuses reviewer.agent with reviewer.model under the %s backend", (backend, reviewer) => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: { backend, ...reviewer, decision: { provider: "typesafe", apiKey: "k" } },
+          },
+          env: {},
+        }),
+      ).toThrow("reviewer.model is the deprecated name of reviewer.agent.model");
+    });
+
+    it.each(["agent", "decision"])(
+      "refuses reviewer.decision with reviewer.decisionModel under the %s backend",
+      (backend) => {
+        expect(() =>
+          parsePluginConfiguration({
+            options: {
+              reviewer: {
+                backend,
+                decision: { provider: "typesafe", apiKey: "k" },
+                decisionModel: { provider: "typesafe", apiKey: "k" },
+              },
+            },
+            env: {},
+          }),
+        ).toThrow("reviewer.decisionModel is the deprecated name of reviewer.decision");
+      },
+    );
+
+    it.each([
+      ["decision", { decisionModel: { provider: "typesafe", apiKey: "k" } }, "decision"],
+      ["agent", { model: { providerID: "a", modelID: "b" } }, "agent"],
+      ["opencode", { agent: { model: { providerID: "a", modelID: "b" } } }, "agent"],
+    ])("accepts backend %s with options under the other naming", (backend, options, expected) => {
+      expect(
+        parsePluginConfiguration({ options: { reviewer: { backend, ...options } }, env: {} })
+          .reviewer.backend,
+      ).toBe(expected);
+    });
+
+    it("names reviewer.decisionModel in a typesafe error", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "decision-model",
+              decisionModel: { provider: "typesafe", baseURL: "https://proxy.example" },
+            },
+          },
+          env: { TYPESAFE_API_KEY: "k" },
+        }),
+      ).toThrow("reviewer.decisionModel.baseURL needs reviewer.decisionModel.apiKey");
+    });
+  });
+
   describe("deprecated jev backend", () => {
     it("still reads reviewer.jev as the typesafe provider", () => {
       expect(
@@ -531,11 +602,11 @@ describe("parsePluginConfiguration", () => {
       ).toThrow("reviewer.jev.baseURL needs reviewer.jev.apiKey");
     });
 
-    it("refuses reviewer.decisionModel next to backend jev", () => {
+    it.each(["decision", "decisionModel"])("refuses reviewer.%s next to backend jev", (key) => {
       expect(() =>
         parsePluginConfiguration({
           options: {
-            reviewer: { backend: "jev", decision: { provider: "cloudflare", apiKey: "key" } },
+            reviewer: { backend: "jev", [key]: { provider: "cloudflare", apiKey: "key" } },
           },
           env: {},
         }),

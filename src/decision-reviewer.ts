@@ -1,8 +1,8 @@
 import * as z from "zod/mini";
 
-import type { Reviewer, ReviewRequest, ReviewVerdict } from "./agent-reviewer.js";
-import { sanitizeReason, userInstructionsPreamble } from "./agent-reviewer.js";
 import type { DecisionConfiguration, PluginConfiguration } from "./config.js";
+import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
+import { sanitizeReason, userInstructionsPreamble } from "./reviewer.js";
 import { costUSD, type UsageRecorder } from "./usage.js";
 
 /**

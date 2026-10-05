@@ -1,6 +1,5 @@
 import type { Agent, Plugin } from "@opencode/plugin";
 
-import type { ReviewSessionClient } from "./agent-reviewer.js";
 import {
   reviewerAgentDescription,
   reviewerAgentName,
@@ -9,6 +8,7 @@ import {
 } from "./agent-reviewer.js";
 import type { ModelReference } from "./config.js";
 import { parsePluginConfiguration } from "./config.js";
+import type { ReviewSessionClient } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
 

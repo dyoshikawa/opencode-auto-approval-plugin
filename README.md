@@ -205,7 +205,7 @@ same System One API:
   the whole request including the response body. HTTP errors (`402` out of credit, `429` rate
   limited, `5xx` outage) are reported by status only and handled like any other reviewer failure.
 - `reviewer.agent` has no effect with the `decision` backend, and `reviewer.decision`
-  none with `opencode`. Aliases such as `jev-latest` follow new model releases, which may shift
+  none with the `agent` backend. Aliases such as `jev-latest` follow new model releases, which may shift
   verdicts; pin a version for stable behavior.
 
 ### Usage and cost statistics
@@ -275,8 +275,8 @@ string.
 
 - Both backends receive the instructions as trusted guidance that takes precedence over the
   built-in safety guidance — though never over the answer format or the rule that operation data
-  is untrusted, so text inside a command or file cannot pose as your instructions: the `opencode`
-  reviewer reads them in its prompt ahead of the operation data, and the `decision` backend
+  is untrusted, so text inside a command or file cannot pose as your instructions: the `agent`
+  backend reads them in its prompt ahead of the operation data, and the `decision` backend
   appends them to the question's `instructions`, never to the state it judges.
 - They are guidance for an AI reviewer, not deterministic rules: the reviewer still sees the whole
   operation and may decide otherwise. Use OpenCode's own permission rules (`permissions` on 2.x,
@@ -297,8 +297,8 @@ startup so that neither is silently ignored.
 | ------------------------------------------------ | ------------------------------------------------- |
 | `backend: "opencode"`                            | `backend: "agent"`                                |
 | `reviewer.model`                                 | `reviewer.agent.model`                            |
-| `backend: "decision-model"`                      | `backend: "decision"`                             |
-| `reviewer.decisionModel`                         | `reviewer.decision`                               |
+| `backend: "decision-model"` (v0.5)               | `backend: "decision"`                             |
+| `reviewer.decisionModel` (v0.5)                  | `reviewer.decision`                               |
 | `backend: "jev"` with `reviewer.jev` (v0.3–v0.4) | `backend: "decision"` with `provider: "typesafe"` |
 
 ### Review modes
