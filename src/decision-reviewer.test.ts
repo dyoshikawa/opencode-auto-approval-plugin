@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { parsePluginConfiguration } from "./config.js";
 import { DecisionReviewer } from "./decision-reviewer.js";
-import { type ReviewRequest, userInstructionsPreamble } from "./reviewer.js";
+import { OversizeError, type ReviewRequest, userInstructionsPreamble } from "./reviewer.js";
 import type { UsageRecord } from "./usage.js";
 
 const request: ReviewRequest = {
@@ -152,32 +152,6 @@ describe("DecisionReviewer", () => {
     },
   );
 
-  it("cuts an oversized resource to a preview and never allows it", async () => {
-    const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "allow" }) });
-
-    const verdict = await reviewer.review({
-      ...request,
-      action: "edit",
-      resource: { filePath: "a.ts", content: "x".repeat(200_000) },
-    });
-
-    const state = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state;
-    expect(state.resource).toMatchObject({ truncated: true });
-    expect(JSON.stringify(state.resource.preview).length).toBeLessThanOrEqual(64_000);
-    expect(JSON.stringify(state.resource.preview).length).toBeGreaterThan(63_900);
-    expect(verdict.verdict).toBe("escalate");
-  });
-
-  it("never allows when the user's request had to be cut", async () => {
-    const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "allow" }) });
-
-    const verdict = await reviewer.review({ ...request, userIntent: "y".repeat(20_000) });
-
-    const state = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state;
-    expect(state.userIntent).toHaveLength(15_999);
-    expect(verdict.verdict).toBe("escalate");
-  });
-
   it("does not mistake a resource's own truncated field for a cut", async () => {
     const { reviewer } = reviewerWith({ response: async () => answer({ choice: "allow" }) });
 
@@ -196,32 +170,6 @@ describe("DecisionReviewer", () => {
       verdict: "escalate",
       reason: "jev-latest leaned allow at 0.50, below the 0.60 threshold (confidence 0.50).",
     });
-  });
-
-  it("keeps a deny for an oversized resource", async () => {
-    const { reviewer } = reviewerWith({ response: async () => answer({ choice: "deny" }) });
-
-    await expect(
-      reviewer.review({ ...request, resource: { content: "x".repeat(200_000) } }),
-    ).resolves.toMatchObject({ verdict: "deny" });
-  });
-
-  it("bounds the preview by its escaped size", async () => {
-    const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "deny" }) });
-
-    await reviewer.review({ ...request, resource: { content: 'say "hi"\\n'.repeat(20_000) } });
-
-    const { preview } = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state.resource;
-    expect(JSON.stringify(preview).length).toBeLessThanOrEqual(64_000);
-  });
-
-  it("never ends a cut intent on half a surrogate pair", async () => {
-    const { reviewer, fetch } = reviewerWith({ response: async () => answer({ choice: "deny" }) });
-
-    await reviewer.review({ ...request, userIntent: `"${"😀".repeat(10_000)}` });
-
-    const intent: string = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state.userIntent;
-    expect(intent.endsWith("😀…")).toBe(true);
   });
 
   it("reads a missing probability as zero rather than the confidence", async () => {
@@ -490,5 +438,114 @@ describe("DecisionReviewer usage records", () => {
       { provider: "cloudflare", model: "clef", inputTokens: 219, outputTokens: 0, verdict: "deny" },
     ]);
     expect(records[0]?.costUSD).toBeCloseTo((219 * 0.24) / 1_000_000, 12);
+  });
+});
+
+function oversizeReviewer(input: { response: () => Promise<Response>; maxStateTokens?: number }) {
+  const records: UsageRecord[] = [];
+  const fetch = vi.fn<typeof globalThis.fetch>(input.response);
+  const reviewer = new DecisionReviewer({
+    configuration: parsePluginConfiguration({
+      options: {
+        reviewer: {
+          backend: "decision",
+          decision: { provider: "typesafe", maxStateTokens: input.maxStateTokens },
+        },
+      },
+      env: { TYPESAFE_API_KEY: "test-key" },
+    }),
+    fetch,
+    recordUsage: (record) => records.push(record),
+  });
+  return { reviewer, fetch, records };
+}
+
+describe("DecisionReviewer with an operation too large for the model", () => {
+  it("does not send an operation whose estimate exceeds the budget", async () => {
+    const { reviewer, fetch, records } = oversizeReviewer({
+      response: async () => answer({ choice: "allow" }),
+    });
+
+    // 30,000 Japanese characters measured as about 30,000 Jev tokens.
+    const review = reviewer.review({
+      ...request,
+      action: "edit",
+      resource: { filePath: "doc.md", content: "日".repeat(30_000) },
+    });
+
+    await expect(review).rejects.toBeInstanceOf(OversizeError);
+    await expect(review).rejects.toThrow(
+      /too large for jev-latest \(about 33,0\d\d tokens, budget 28,000\)/,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(records).toMatchObject([{ verdict: "oversize", inputTokens: 0, costUSD: 0 }]);
+  });
+
+  it("sends a large operation whole when it fits, never a preview", async () => {
+    const { reviewer, fetch } = oversizeReviewer({
+      response: async () =>
+        Response.json({
+          answers: { verdict: { choice: "allow", probabilities: { allow: 0.9 } } },
+          // What Jev counted for 60,000 characters of code.
+          usage: { input_tokens: 17_882 },
+        }),
+    });
+    const content = "x".repeat(60_000);
+
+    await expect(
+      reviewer.review({ ...request, resource: { filePath: "a.ts", content } }),
+    ).resolves.toMatchObject({ verdict: "allow" });
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).state.resource.content).toBe(content);
+  });
+
+  it("follows a configured budget", async () => {
+    const { reviewer, fetch } = oversizeReviewer({
+      maxStateTokens: 1_000,
+      response: async () => answer({ choice: "allow" }),
+    });
+
+    await expect(
+      reviewer.review({ ...request, resource: { content: "x".repeat(5_000) } }),
+    ).rejects.toBeInstanceOf(OversizeError);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("treats Jev's max_tokens_exceeded as oversize", async () => {
+    const { reviewer, records } = oversizeReviewer({
+      response: async () =>
+        Response.json({ detail: { error_type: "max_tokens_exceeded" } }, { status: 400 }),
+    });
+
+    await expect(reviewer.review(request)).rejects.toThrow(
+      "Operation too large for jev-latest (refused by the API).",
+    );
+    expect(records).toMatchObject([{ verdict: "oversize", inputTokens: null }]);
+  });
+
+  it("keeps any other 400 a plain failure", async () => {
+    const { reviewer } = oversizeReviewer({
+      response: async () => Response.json({ detail: "bad question" }, { status: 400 }),
+    });
+
+    const review = reviewer.review(request);
+    await expect(review).rejects.toThrow("Decision model request failed with HTTP 400.");
+    await expect(review).rejects.not.toBeInstanceOf(OversizeError);
+  });
+
+  it("does not trust an answer from a server that counted far fewer tokens than it was sent", async () => {
+    const { reviewer, records } = oversizeReviewer({
+      response: async () =>
+        Response.json({
+          answers: { verdict: { choice: "allow", probabilities: { allow: 0.99 } } },
+          usage: { input_tokens: 1_000 },
+        }),
+    });
+
+    await expect(
+      reviewer.review({ ...request, resource: { content: "日本語".repeat(6_000) } }),
+    ).rejects.toThrow(
+      /counted 1,000 tokens for a prompt of at least [\d,]+, so it likely cut the input/,
+    );
+    expect(records).toMatchObject([{ verdict: "oversize", inputTokens: 1_000 }]);
   });
 });

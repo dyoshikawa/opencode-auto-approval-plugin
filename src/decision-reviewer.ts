@@ -1,8 +1,15 @@
 import * as z from "zod/mini";
 
 import type { DecisionConfiguration, PluginConfiguration } from "./config.js";
+import { type Fetch, postJSON } from "./http.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
-import { sanitizeReason, userInstructionsPreamble } from "./reviewer.js";
+import {
+  assertReadWhole,
+  estimateTokens,
+  OversizeError,
+  sanitizeReason,
+  userInstructionsPreamble,
+} from "./reviewer.js";
 import { costUSD, type UsageRecorder } from "./usage.js";
 
 /**
@@ -12,20 +19,7 @@ import { costUSD, type UsageRecorder } from "./usage.js";
  * opened, so the reviewer never inspects the workspace.
  */
 
-type Fetch = typeof globalThis.fetch;
-
 const verdicts = ["allow", "deny", "escalate"] as const;
-
-/**
- * The APIs refuse a state beyond their token limit (Jev answered a 200 KB edit
- * with `max_tokens_exceeded` and accepted 80,000 characters as 32k tokens;
- * Clef allows 64k tokens), and a large state is billed in full, so the
- * resource and the intent are cut to a preview. Both limits count characters
- * as encoded in the request body.
- */
-const MAX_RESOURCE_CHARS = 64_000;
-
-const MAX_INTENT_CHARS = 16_000;
 
 const verdictInstructions = [
   "The state is an operation an AI coding agent wants to run in the user's workspace, with the user's latest request as userIntent.",
@@ -117,7 +111,11 @@ export class DecisionReviewer implements Reviewer {
       return decision;
     } catch (error) {
       // A failed call may still be billed (a timeout after the model ran).
-      this.#record({ startedAt, tokens, verdict: "error" });
+      this.#record({
+        startedAt,
+        tokens,
+        verdict: error instanceof OversizeError ? "oversize" : "error",
+      });
       throw error;
     }
   }
@@ -125,7 +123,7 @@ export class DecisionReviewer implements Reviewer {
   #record(input: {
     startedAt: number;
     tokens: { input: number | null; output: number | null };
-    verdict: ReviewVerdict["verdict"] | "error";
+    verdict: ReviewVerdict["verdict"] | "error" | "oversize";
   }): void {
     if (this.#recordUsage === undefined) return;
     const { provider, model, endpoint } = this.#configuration;
@@ -138,7 +136,7 @@ export class DecisionReviewer implements Reviewer {
         project: this.#project,
         inputTokens: input.tokens.input,
         outputTokens: input.tokens.output,
-        latencyMs: Date.now() - input.startedAt,
+        latencyMs: Math.max(0, Date.now() - input.startedAt),
         verdict: input.verdict,
         costUSD: costUSD({ provider, endpoint, model, inputTokens: input.tokens.input }),
       });
@@ -151,74 +149,60 @@ export class DecisionReviewer implements Reviewer {
     request: ReviewRequest;
     tokens: { input: number | null; output: number | null };
   }): Promise<ReviewVerdict> {
-    const controller = new AbortController();
-    // Racing the abort as well as passing the signal keeps the deadline even
-    // when a fetch implementation does not honour the signal.
-    const timedOut = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener("abort", () => reject(new Error("Reviewer timed out.")));
-    });
-    const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
-    try {
-      // The timeout covers the body as well as the headers.
-      const { state, truncated } = reviewState(input.request);
-      const body = await Promise.race([
-        this.#request({ state, signal: controller.signal }),
-        timedOut,
-      ]);
-      const usage = z.safeParse(usageSchema, body);
-      if (usage.success) {
-        input.tokens.input = usage.data.usage?.input_tokens ?? null;
-        input.tokens.output = usage.data.usage?.output_tokens ?? null;
-      }
-      return this.#verdict({ answer: body, truncated });
-    } catch (error) {
-      if (controller.signal.aborted) throw new Error("Reviewer timed out.", { cause: error });
-      throw error;
-    } finally {
-      clearTimeout(timeout);
+    const state = reviewState(input.request);
+    const { model, maxStateTokens } = this.#configuration;
+    const serialized = JSON.stringify(state);
+    const estimate = estimateTokens(serialized);
+    if (estimate > maxStateTokens) {
+      // Nothing was sent, so nothing was billed.
+      input.tokens.input = 0;
+      input.tokens.output = 0;
+      throw new OversizeError(
+        `Operation too large for ${model} (about ${estimate.toLocaleString("en-US")} tokens, budget ${maxStateTokens.toLocaleString("en-US")}).`,
+      );
     }
+
+    const result = await postJSON({
+      fetch: this.#fetch,
+      url: this.#configuration.endpoint,
+      apiKey: this.#configuration.apiKey,
+      body: {
+        model,
+        state,
+        questions: { verdict: verdictQuestion({ instructions: this.#instructions }) },
+      },
+      timeoutMs: this.#timeoutMs,
+      label: "Decision model",
+    });
+    if (!result.ok) {
+      // Jev answers 400 {"detail":{"error_type":"max_tokens_exceeded"}} for a
+      // state over its limit: the estimate fell short, and a smaller request
+      // would only be a partial view.
+      if (result.status === 400 && result.text.includes("max_tokens_exceeded")) {
+        throw new OversizeError(`Operation too large for ${model} (refused by the API).`);
+      }
+      // 402 means the account is out of credit, 429 rate limited, 5xx an outage.
+      throw new Error(`Decision model request failed with HTTP ${result.status}.`);
+    }
+
+    const body = this.#unwrap(result.body);
+    const usage = z.safeParse(usageSchema, body);
+    if (usage.success) {
+      input.tokens.input = usage.data.usage?.input_tokens ?? null;
+      input.tokens.output = usage.data.usage?.output_tokens ?? null;
+    }
+    assertReadWhole({ model, prompt: serialized, reportedTokens: input.tokens.input });
+    return this.#verdict({ answer: body });
   }
 
-  async #request(input: { state: Record<string, unknown>; signal: AbortSignal }): Promise<unknown> {
-    let response: Response;
-    try {
-      response = await this.#fetch(this.#configuration.endpoint, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.#configuration.apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: this.#configuration.model,
-          state: input.state,
-          questions: { verdict: verdictQuestion({ instructions: this.#instructions }) },
-        }),
-        // A redirect could carry the bearer token to another host.
-        redirect: "error",
-        signal: input.signal,
-      });
-    } catch (error) {
-      // Network errors may echo the URL; the message stays generic.
-      throw new Error("Decision model request failed.", { cause: error });
-    }
-
-    if (!response.ok) {
-      // 402 means the account is out of credit, 429 rate limited, 5xx an outage.
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error(`Decision model request failed with HTTP ${response.status}.`);
-    }
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch (error) {
-      throw new Error("Decision model response was not JSON.", { cause: error });
-    }
+  /** Workers AI wraps the System One answer in its API envelope. */
+  #unwrap(body: unknown): unknown {
     if (this.#configuration.provider !== "cloudflare") return body;
     const envelope = z.safeParse(cloudflareEnvelopeSchema, body);
     return envelope.success ? envelope.data.result : undefined;
   }
 
-  #verdict(input: { answer: unknown; truncated: boolean }): ReviewVerdict {
+  #verdict(input: { answer: unknown }): ReviewVerdict {
     const result = z.safeParse(answerSchema, input.answer);
     if (!result.success) {
       throw new Error("Decision model response did not match the verdict schema.");
@@ -247,14 +231,6 @@ export class DecisionReviewer implements Reviewer {
         ),
       };
     }
-    if (answer.choice === "allow" && input.truncated) {
-      return {
-        verdict: "escalate",
-        reason: sanitizeReason(
-          `${model} chose allow but saw only part of an oversized operation or request (${summary}).`,
-        ),
-      };
-    }
     return {
       verdict: answer.choice,
       reason: sanitizeReason(`${model} chose ${answer.choice} (${summary}).`),
@@ -262,59 +238,14 @@ export class DecisionReviewer implements Reviewer {
   }
 }
 
-/** The state sent to the model, and whether any of it had to be cut to fit. */
-function reviewState(input: ReviewRequest): {
-  state: Record<string, unknown>;
-  truncated: boolean;
-} {
-  const resource = boundedResource(input.resource);
+/** The state sent to the model: the whole operation, never a preview. */
+function reviewState(input: ReviewRequest): Record<string, unknown> {
   // An empty prompt (an attachment only) is no stated intent.
-  const text = input.userIntent?.trim();
-  const intent = text ? boundedText(text) : undefined;
+  const intent = input.userIntent?.trim();
   return {
-    state: {
-      source: input.source,
-      action: input.action,
-      resource: resource.value,
-      userIntent: intent?.value ?? null,
-    },
-    truncated: resource.truncated || (intent?.truncated ?? false),
+    source: input.source,
+    action: input.action,
+    resource: input.resource ?? null,
+    userIntent: intent ? intent : null,
   };
-}
-
-function boundedResource(input: unknown): { value: unknown; truncated: boolean } {
-  const serialized = JSON.stringify(input) ?? "null";
-  if (serialized.length <= MAX_RESOURCE_CHARS) return { value: input ?? null, truncated: false };
-  return {
-    value: {
-      truncated: true,
-      originalLength: serialized.length,
-      preview: cutToEncodedLength({ text: serialized, max: MAX_RESOURCE_CHARS }),
-    },
-    truncated: true,
-  };
-}
-
-function boundedText(input: string): { value: string; truncated: boolean } {
-  return JSON.stringify(input).length <= MAX_INTENT_CHARS
-    ? { value: input, truncated: false }
-    : { value: `${cutToEncodedLength({ text: input, max: MAX_INTENT_CHARS })}…`, truncated: true };
-}
-
-/**
- * Cuts `text` so that it stays within `max` characters once it is encoded as a
- * JSON string in the request body: quotes, backslashes and control characters
- * grow when escaped, and a preview of serialized JSON is escaped twice.
- */
-function cutToEncodedLength(input: { text: string; max: number }): string {
-  let text = input.text.slice(0, input.max);
-  let excess = JSON.stringify(text).length - input.max;
-  while (excess > 0) {
-    // Every character costs at least one encoded character, so cutting the
-    // excess always converges.
-    text = text.slice(0, text.length - excess);
-    excess = JSON.stringify(text).length - input.max;
-  }
-  // Never end on the first half of a surrogate pair.
-  return /[\uD800-\uDBFF]$/.test(text) ? text.slice(0, -1) : text;
 }

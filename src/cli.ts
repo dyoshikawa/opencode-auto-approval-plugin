@@ -9,7 +9,7 @@ import { projectID, type UsageRecord, usageLogPath, usageRecordSchema } from "./
 
 const usage = `Usage: opencode-auto-approval-plugin stats [flags]
 
-Show token usage and cost of decision model reviews (Jev, Clef).
+Show token usage and cost of decision and chat reviews (Jev, Clef, Chat Completions).
 
 Flags:
   --days <n>         Show the last N days; 0 means today

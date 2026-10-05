@@ -100,7 +100,7 @@ describe("summarize", () => {
         project: "p",
       }),
     ).toBe(
-      "auto-approval stats · today · this project\n\nno decision model reviews in this range\n",
+      "auto-approval stats · today · this project\n\nno decision or chat reviews in this range\n",
     );
   });
 
@@ -125,5 +125,20 @@ describe("summarize", () => {
 
     expect(summarize({ records: many, range: { kind: "all" }, now }).reviews).toBe(200_000);
     expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it("counts oversize attempts but leaves them out of the latency", () => {
+    const stats = summarize({
+      records: [
+        record({ time: now, latencyMs: 300 }),
+        record({ time: now, latencyMs: 2, verdict: "oversize", inputTokens: 0, costUSD: 0 }),
+      ],
+      range: { kind: "all" },
+      now,
+    });
+
+    expect(stats.verdicts.oversize).toBe(1);
+    expect(stats.models[0]?.medianLatencyMs).toBe(300);
+    expect(formatStats({ stats })).toContain("oversize 50%");
   });
 });

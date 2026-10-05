@@ -7,6 +7,14 @@ import { type ReviewSessionClient, userInstructionsPreamble } from "./reviewer.j
 type ReviewPrompt = Parameters<ReviewSessionClient["prompt"]>[0];
 type ReviewSessionOptions = Parameters<ReviewSessionClient["create"]>[0];
 
+/** A model that read the whole prompt echoes its review check. */
+function echoCheck(reply: string, prompt: string): string {
+  const check = /Review check: "([\da-f-]+)"/.exec(prompt)?.[1];
+  return check !== undefined && reply.includes('"verdict"') && !reply.includes('"check"')
+    ? reply.replace(/\}\s*$/, `,"check":"${check}"}`)
+    : reply;
+}
+
 function clientWithResponse(input: { response: string }): ReviewSessionClient & {
   sessions: ReviewSessionOptions[];
   prompts: ReviewPrompt[];
@@ -25,7 +33,7 @@ function clientWithResponse(input: { response: string }): ReviewSessionClient & 
     },
     prompt: async (request) => {
       prompts.push(request);
-      return input.response;
+      return echoCheck(input.response, request.text);
     },
     abort: async ({ sessionID }) => {
       aborted.push(sessionID);
@@ -33,7 +41,7 @@ function clientWithResponse(input: { response: string }): ReviewSessionClient & 
   };
 }
 
-describe("Reviewer", () => {
+describe("AgentReviewer", () => {
   it("inherits the main session model when no reviewer model is configured", async () => {
     const client = clientWithResponse({ response: '{"verdict":"allow","reason":"read-only"}' });
     const reviewer = new AgentReviewer({
@@ -160,9 +168,9 @@ describe("Reviewer", () => {
       client,
       configuration: parsePluginConfiguration({ options: {} }),
     });
-    client.prompt = async () => {
+    client.prompt = async (request) => {
       expect(reviewer.isReviewerSession({ sessionID: "review-session" })).toBe(true);
-      return '{"verdict":"allow","reason":"ok"}';
+      return echoCheck('{"verdict":"allow","reason":"ok"}', request.text);
     };
 
     await reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} });
@@ -200,5 +208,39 @@ describe("Reviewer", () => {
 
     expect(decision.verdict).toBe("deny");
     expect(decision.reason).toBe("x".repeat(300));
+  });
+
+  it("escalates an operation over its character limit without opening a session", async () => {
+    const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
+    const reviewer = new AgentReviewer({
+      client,
+      configuration: parsePluginConfiguration({
+        options: { reviewer: { agent: { maxInputBytes: 1_000 } } },
+      }),
+    });
+
+    await expect(
+      reviewer.review({
+        source: "tool-call",
+        sessionID: "main",
+        action: "write",
+        resource: { content: "x".repeat(5_000) },
+      }),
+    ).rejects.toThrow("Operation too large for the agent reviewer");
+    expect(client.sessions).toEqual([]);
+  });
+
+  it("does not trust a reply that lacks the review check", async () => {
+    const client = clientWithResponse({
+      response: '{"verdict":"allow","reason":"ok","check":"guess"}',
+    });
+    const reviewer = new AgentReviewer({
+      client,
+      configuration: parsePluginConfiguration({ options: {} }),
+    });
+
+    await expect(
+      reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} }),
+    ).rejects.toThrow("lacked the review check");
   });
 });

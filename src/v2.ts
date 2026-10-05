@@ -7,7 +7,7 @@ import {
   reviewerAllowedTools,
 } from "./agent-reviewer.js";
 import type { ModelReference } from "./config.js";
-import { parsePluginConfiguration } from "./config.js";
+import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
 import type { ReviewSessionClient } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
@@ -88,8 +88,9 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       const intents = new Map<string, string>();
 
       // `update` on an unknown ID registers a new agent; the branded ID/Name
-      // types are plain strings at runtime. The decision backend needs no agent.
-      if (configuration.reviewer.backend === "agent") {
+      // types are plain strings at runtime. Only the agent reviewer needs one,
+      // as the backend or as the decision backend's oversize fallback.
+      if (usesAgentReviewer(configuration)) {
         await context.agent.transform((editor) => {
           editor.update(reviewerAgentName as unknown as Agent.ID, (agent) => {
             agent.name = reviewerAgentName as unknown as Agent.Name;
@@ -108,7 +109,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       // counts when this plugin defined that agent as read-only; with a decision model an
       // agent of that name is someone else's and must be reviewed.
       const isReviewer = (event: { sessionID: string; agent?: string }): boolean =>
-        (configuration.reviewer.backend === "agent" && event.agent === reviewerAgentName) ||
+        (usesAgentReviewer(configuration) && event.agent === reviewerAgentName) ||
         reviewer.isReviewerSession({ sessionID: event.sessionID });
 
       await context.session.hook("prompt", (event) => {
@@ -117,8 +118,8 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       });
 
       const sessionModel = async (sessionID: string): Promise<ModelReference | undefined> => {
-        // Only the agent backend reviews with the session's model.
-        if (configuration.reviewer.backend !== "agent") return undefined;
+        // Only the agent reviewer uses the session's model.
+        if (!usesAgentReviewer(configuration)) return undefined;
         try {
           const session = await context.session.get({ sessionID });
           return fromModelRef(session.model);

@@ -122,6 +122,44 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(agents.size).toBe(0);
   });
 
+  it("registers the reviewer subagent for the decision backend's agent fallback", async () => {
+    const { context, agents, hooks } = createContext({
+      options: {
+        reviewer: {
+          backend: "decision",
+          decision: { provider: "typesafe", apiKey: "test-key", onOversize: "agent" },
+        },
+      },
+    });
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+
+    await plugin.setup(context as never);
+    await hooks["permission.evaluate"]?.(
+      askEvent({ sessionID: "session-1", agent: "auto-approval-reviewer" }),
+    );
+
+    expect(agents.get("auto-approval-reviewer")).toMatchObject({ mode: "subagent", hidden: true });
+    // Its own tool calls are the plugin's reviewer, not something to review.
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it("looks up the session's model for the agent fallback", async () => {
+    const { context, hooks } = createContext({
+      options: {
+        reviewer: {
+          backend: "decision",
+          decision: { provider: "typesafe", apiKey: "test-key", onOversize: "agent" },
+        },
+      },
+    });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+
+    await hooks["permission.evaluate"]?.(askEvent());
+
+    expect(context.session.get).toHaveBeenCalled();
+  });
+
   it("turns an ask into allow only when the reviewer allows it", async () => {
     const { context, hooks } = createContext();
     const { plugin, review } = createPlugin({ verdict: "allow" });

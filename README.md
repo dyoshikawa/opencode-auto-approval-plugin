@@ -3,11 +3,12 @@
 An [OpenCode](https://opencode.ai/) plugin that sends tool operations to a read-only AI reviewer
 before automatically approving them.
 
-The reviewer is one of two backends:
+The reviewer is one of three backends:
 
 | `reviewer.backend` | How it reviews                                                                                                                                                                                             |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent` (default)  | An LLM in its own OpenCode session. It may inspect the workspace with `read`, `glob`, `grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or start subagents. |
+| `chat`             | An LLM asked once through an OpenAI-compatible Chat Completions API — OpenAI, OpenRouter, Workers AI, a local server — with the same prompt as the agent but no session and no tools.                      |
 | `decision`         | A [decision model](#decision-backend) over HTTP — TypeSafe AI's Jev or Cloudflare's Clef — that picks `allow`, `deny` or `escalate` with calibrated probabilities in one call.                             |
 
 Names used by earlier versions keep working; see [deprecated names](#deprecated-names).
@@ -125,7 +126,8 @@ remains entirely in OpenCode.
 Set `reviewer.backend` to `"decision"` to have a decision model judge each operation instead of an
 OpenCode session. The plugin sends one request with the operation (`source`, `action`,
 `resource`, and the user's latest prompt) and a single `allow` / `deny` / `escalate` choice. No
-reviewer agent or session is created and the workspace is not inspected. Two providers speak the
+reviewer agent or session is created (unless `onOversize` is `"agent"`) and the workspace is not
+inspected. Two providers speak the
 same System One API:
 
 | Provider     | Models                                                                                                  | Credentials (option / environment)                                       | Default model |
@@ -155,15 +157,18 @@ same System One API:
 }
 ```
 
-| Option                                  | Default                   | Description                                                               |
-| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------- |
-| `reviewer.backend`                      | `"agent"`                 | `"agent"` (reviewer session) or `"decision"`                              |
-| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                            |
-| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access     |
-| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback) |
-| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                            |
-| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior    |
-| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`           |
+| Option                                  | Default                   | Description                                                                                                        |
+| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `reviewer.backend`                      | `"agent"`                 | `"agent"`, `"chat"` or `"decision"`                                                                                |
+| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                                                                     |
+| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access                                              |
+| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback)                                          |
+| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                                                                     |
+| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior                                             |
+| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                                                    |
+| `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)                                        |
+| `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer                               |
+| `reviewer.agent.maxInputBytes`          | `200000`                  | The agent reviewer escalates a prompt longer than this (UTF-8 bytes) unsent rather than let the session compact it |
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the
@@ -192,11 +197,10 @@ same System One API:
 - The operation leaves your machine: the resource holds the full command, file content of a
   write or edit, and permission metadata such as diffs, and the user intent is your latest prompt.
   All of it is sent to the provider, so an edit of a secrets file sends those secrets.
-- A resource larger than 64,000 characters once encoded as JSON (for example a large file write)
-  is sent as a truncated preview, and a prompt longer than 16,000 characters is cut; an `allow` for
-  either is escalated, because the model saw only part of it. With `on-ask` that leaves OpenCode's
-  permission prompt; with `all-tools` such a tool call is always blocked, and retrying the same call
-  does not help — split the write or switch to `on-ask`.
+- An operation is never sent in part, since a partial view cannot justify an approval. One whose
+  estimated size exceeds `maxStateTokens`, or that the API refuses as too long, is
+  [too large](#operations-too-large-for-the-decision-model): by default it escalates to a human with
+  the reason.
 - `baseURL` must use HTTPS unless it points at a loopback host (`localhost`, `127.0.0.1`,
   `[::1]`). Whoever serves it receives the API key and decides every verdict, so set it only in
   configuration you trust (not a repository's `opencode.json` you have not reviewed) — the same
@@ -204,16 +208,99 @@ same System One API:
 - Redirects are refused so the API key is never forwarded to another host, and the timeout covers
   the whole request including the response body. HTTP errors (`402` out of credit, `429` rate
   limited, `5xx` outage) are reported by status only and handled like any other reviewer failure.
-- `reviewer.agent` has no effect with the `decision` backend, and `reviewer.decision`
-  none with the `agent` backend. Aliases such as `jev-latest` follow new model releases, which may shift
+- `reviewer.agent` has no effect with the `decision` backend unless `onOversize` is `"agent"`, and
+  `reviewer.decision` none with the `agent` backend. Aliases such as `jev-latest` follow new model releases, which may shift
   verdicts; pin a version for stable behavior.
+
+### Operations too large for the decision model
+
+Jev refuses a `state` over 32Ki tokens, and Clef, which accepts 64Ki, slows to tens of seconds
+past 20,000. Before sending, the plugin estimates the size conservatively (ASCII at 2.5 characters
+a token, any other character at 1.1 tokens: Japanese measured about one token per character on
+both models, so a Japanese file reaches Jev's default 28,000-token budget at about 25,000
+characters; Clef's default is 20,000 to stay within the default timeout)
+and treats Jev's `max_tokens_exceeded` the same way. What happens next is
+`reviewer.decision.onOversize`:
+
+| `onOversize`         | Too-large operation                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------------- |
+| `escalate` (default) | Not approved: `on-ask` leaves OpenCode's prompt for a human; `all-tools` blocks the tool with the reason |
+| `agent`              | Reviewed by the [agent](#configuration) reviewer, which can also read the file it concerns               |
+| `chat`               | Reviewed by the [chat backend](#chat-backend) in one call, with the whole operation                      |
+
+A fallback reviews the whole operation, so its `allow` stands. Choose a fallback model at least as
+careful as the decision model: an operation padded past the budget reaches it instead, and it has
+no `minAllowProbability` gate. Use it where nobody can answer a
+prompt — OpenCode working inside a GitHub Actions workflow, for example — so that a large edit
+does not stop the run. The default stays `escalate`: a fallback can widen what is approved
+automatically, so set it only in configuration you trust, like `baseURL` and
+`minAllowProbability`. Each reviewer has its own `reviewer.timeoutMs`, so a fallback review can take
+up to twice as long.
+
+```jsonc
+"reviewer": {
+  "backend": "decision",
+  "decision": { "provider": "typesafe", "onOversize": "chat" },
+  "chat": { "baseURL": "https://openrouter.ai/api/v1", "apiKey": "{env:OPENROUTER_API_KEY}", "model": "openai/gpt-5.6-luna" },
+}
+```
+
+### Chat backend
+
+Set `reviewer.backend` to `"chat"` to have an LLM review each operation in a single request to an
+OpenAI-compatible `POST <baseURL>/chat/completions`, or use it only as the decision backend's
+`onOversize` fallback. It sends the agent reviewer's prompt — the user's instructions, then the
+operation inside a random boundary it is told never to take instructions from — and reads back a
+`{"verdict","reason"}` JSON object. There is no session and no tool, so it judges the operation data
+alone, and the plugin needs an API key of its own.
+
+| Option                        | Default                                                         | Description                                                                    |
+| ----------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `reviewer.chat.model`         | — (required)                                                    | Model ID as the endpoint names it, such as `openai/gpt-5.6-luna` on OpenRouter |
+| `reviewer.chat.apiKey`        | `AUTO_APPROVAL_CHAT_API_KEY`                                    | Bearer token for the endpoint                                                  |
+| `reviewer.chat.baseURL`       | `AUTO_APPROVAL_CHAT_BASE_URL`, else `https://api.openai.com/v1` | Base URL up to `/chat/completions`; HTTPS (HTTP only for loopback)             |
+| `reviewer.chat.maxInputBytes` | `200000`                                                        | A prompt longer than this (UTF-8 bytes) is too large and escalates unsent      |
+
+- As with TypeSafe, the key and the base URL come from the same place: `reviewer.chat.apiKey`
+  with `reviewer.chat.baseURL`, or `AUTO_APPROVAL_CHAT_API_KEY` with `AUTO_APPROVAL_CHAT_BASE_URL`,
+  never one from each. OpenCode substitutes `{env:NAME}` in plugin options, so an existing variable
+  such as `OPENROUTER_API_KEY` can be used without writing the key down.
+- The same safeguards apply as for the decision backend: redirects are refused, the timeout covers
+  the whole response, errors report the HTTP status only, and an over-long prompt
+  (`context_length_exceeded`, a context length, size or window message, or HTTP 413) counts as too
+  large.
+- Keep `maxInputBytes` within what the server reads whole: for a local server, no more bytes than
+  its context has tokens (Ollama's `num_ctx`) less room for the answer and the chat template, a few
+  hundred tokens — a byte-level tokenizer never makes more than one
+  token a byte, whatever characters the operation is padded with. Some servers cut an over-long
+  prompt instead of refusing it, from the start or the middle. Three guards catch that, each
+  treating the operation as too large:
+  - every prompt (agent reviewer too) opens with a random review check that the answer must echo,
+    so a model whose prompt lost its start cannot answer;
+  - a reported prompt-token count below a floor under the measured densities (10 ASCII characters,
+    2 CJK characters or 6 other characters a token) means part of the prompt was not read — zero or no count says
+    nothing, and cached tokens count as read;
+  - the task, the untrusted-data rule and the answer format are restated after the operation data.
+
+  A cut that keeps the start can still go unnoticed if it is under about two fifths of English
+  prose, two thirds of code or JSON, or half of Japanese; size `maxInputBytes` to the server's
+  context instead of relying on the guards.
+
+- Set `reviewer.chat` — like `onOversize`, `baseURL` and `minAllowProbability` — only in
+  configuration you trust. The same-source rule stops one source redirecting a key from another, but
+  OpenCode substitutes `{env:NAME}` before the plugin sees the options, so a repository's
+  `opencode.json` could pair your own key variable with its own server.
+- The usage log records chat reviews with `provider: "chat"` and the token counts the endpoint
+  reports; their cost is left unpriced, since it depends on the provider and model.
 
 ### Usage and cost statistics
 
-Each decision model review appends one line to a usage log at
+Each decision or chat review appends one line to a usage log at
 `$XDG_DATA_HOME/opencode-auto-approval-plugin/usage.jsonl` (`~/.local/share/…` when `XDG_DATA_HOME`
 is unset): the time, provider, model, a hash of the project directory, input and output tokens,
-latency, the verdict (`error` for a failed call), and the cost at the time of the review. The
+latency, the verdict (`error` for a failed call, `oversize` for an operation too large to send),
+and the cost at the time of the review. An operation handed to a fallback gets two lines: the
+unsent `oversize` attempt and the fallback's review; the latency column leaves `oversize` out. The
 operation, your prompt and the reason are never written, and the file is created readable by you
 only. The project hash keeps the path out of the file but is not a secret — anyone who guesses a
 path can hash it and match it — so treat the log as private before sharing it. Reviews with the
@@ -237,7 +324,7 @@ provider    model       reviews  tokens in  tokens out      cost  p50 latency
 cloudflare  clef            904       431k           0     $0.10       412 ms
 typesafe    jev-latest      380       181k         51k  $0.00760       212 ms
 
-verdicts  allow 81% · escalate 15% · deny 3% · error 1%
+verdicts  allow 81% · escalate 15% · deny 3% · error 1% · oversize 0%
 ```
 
 - Costs use the input prices published on 2026-10-04 (USD per million tokens: Jev $0.042, Clef
@@ -318,8 +405,8 @@ OpenCode's plugin API does not provide a way to create and await a new permissio
 `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict: the tool does
 not run and the user must explicitly retry after reviewing the reported reason.
 
-Both modes work the same way with either reviewer backend, except that the decision backend always
-escalates an operation too large to send in full (see above).
+Both modes work the same way with every reviewer backend. An operation too large for the decision
+or chat backend escalates unless a fallback is configured (see above).
 
 Explicit OpenCode `deny` rules always remain in effect. The plugin is an additional review layer;
 it never turns a built-in deny into an allow.

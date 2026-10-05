@@ -88,7 +88,7 @@ describe("stats command", () => {
     const { code, output } = await run(["stats", "--file", join(directory, "none.jsonl")]);
 
     expect(code).toBe(0);
-    expect(output).toContain("no decision model reviews in this range");
+    expect(output).toContain("no decision or chat reviews in this range");
   });
 
   it("reports an unreadable log on stderr", async () => {
