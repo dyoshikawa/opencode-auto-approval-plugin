@@ -4,6 +4,7 @@ import type { DecisionConfiguration, PluginConfiguration } from "./config.js";
 import { type Fetch, postJSON } from "./http.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import {
+  assertReadWhole,
   estimateTokens,
   OversizeError,
   sanitizeReason,
@@ -135,7 +136,7 @@ export class DecisionReviewer implements Reviewer {
         project: this.#project,
         inputTokens: input.tokens.input,
         outputTokens: input.tokens.output,
-        latencyMs: Date.now() - input.startedAt,
+        latencyMs: Math.max(0, Date.now() - input.startedAt),
         verdict: input.verdict,
         costUSD: costUSD({ provider, endpoint, model, inputTokens: input.tokens.input }),
       });
@@ -150,7 +151,8 @@ export class DecisionReviewer implements Reviewer {
   }): Promise<ReviewVerdict> {
     const state = reviewState(input.request);
     const { model, maxStateTokens } = this.#configuration;
-    const estimate = estimateTokens(JSON.stringify(state));
+    const serialized = JSON.stringify(state);
+    const estimate = estimateTokens(serialized);
     if (estimate > maxStateTokens) {
       // Nothing was sent, so nothing was billed.
       input.tokens.input = 0;
@@ -189,6 +191,7 @@ export class DecisionReviewer implements Reviewer {
       input.tokens.input = usage.data.usage?.input_tokens ?? null;
       input.tokens.output = usage.data.usage?.output_tokens ?? null;
     }
+    assertReadWhole({ model, promptChars: serialized.length, reportedTokens: input.tokens.input });
     return this.#verdict({ answer: body });
   }
 

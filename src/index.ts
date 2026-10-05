@@ -22,7 +22,7 @@ const defaultDependencies: PluginDependencies = {
     const chat = () => new ChatReviewer({ configuration: input.configuration, ...usage });
     switch (reviewer.backend) {
       case "agent":
-        return agent();
+        return new OversizeFallbackReviewer({ primary: agent() });
       case "chat":
         return new OversizeFallbackReviewer({ primary: chat() });
       case "decision": {

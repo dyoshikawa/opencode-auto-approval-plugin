@@ -24,7 +24,12 @@ describe("parsePluginConfiguration", () => {
   it("uses the safe on-ask defaults", () => {
     expect(parsePluginConfiguration({ options: {}, env: {} })).toEqual({
       mode: "on-ask",
-      reviewer: { backend: "agent", agent: {}, timeoutMs: 30_000, recordUsage: true },
+      reviewer: {
+        backend: "agent",
+        agent: { maxInputChars: 400_000 },
+        timeoutMs: 30_000,
+        recordUsage: true,
+      },
     });
   });
 
@@ -43,7 +48,10 @@ describe("parsePluginConfiguration", () => {
       mode: "all-tools",
       reviewer: {
         backend: "agent",
-        agent: { model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" } },
+        agent: {
+          model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
+          maxInputChars: 400_000,
+        },
         timeoutMs: 12_000,
         recordUsage: true,
       },
@@ -282,7 +290,7 @@ describe("parsePluginConfiguration", () => {
         endpoint: `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/cloudflare/clef`,
         model: "clef",
         minAllowProbability: 0.6,
-        maxStateTokens: 28_000,
+        maxStateTokens: 20_000,
         onOversize: "escalate",
       });
     });
@@ -296,7 +304,7 @@ describe("parsePluginConfiguration", () => {
             accountId: optionAccount,
             model: "clef-flash",
             minAllowProbability: 0.8,
-            maxStateTokens: 28_000,
+            maxStateTokens: 20_000,
             onOversize: "escalate",
           }),
           env: { CLOUDFLARE_API_TOKEN: "env-token", CLOUDFLARE_ACCOUNT_ID: accountId },
@@ -307,7 +315,7 @@ describe("parsePluginConfiguration", () => {
         endpoint: `https://api.cloudflare.com/client/v4/accounts/${optionAccount}/ai/run/@cf/cloudflare/clef-flash`,
         model: "clef-flash",
         minAllowProbability: 0.8,
-        maxStateTokens: 28_000,
+        maxStateTokens: 20_000,
         onOversize: "escalate",
       });
     });
@@ -650,7 +658,7 @@ describe("parsePluginConfiguration", () => {
           options: { reviewer: { agent: {}, model: { providerID: "c", modelID: "d" } } },
           env: {},
         }).reviewer.agent,
-      ).toEqual({ model: { providerID: "c", modelID: "d" } });
+      ).toEqual({ model: { providerID: "c", modelID: "d" }, maxInputChars: 400_000 });
     });
 
     it.each(["agent", "decision"])(
@@ -706,7 +714,7 @@ describe("parsePluginConfiguration", () => {
         }).reviewer,
       ).toEqual({
         backend: "decision",
-        agent: {},
+        agent: { maxInputChars: 400_000 },
         timeoutMs: 30_000,
         recordUsage: true,
         decision: {

@@ -53,7 +53,7 @@ export type ChatConfiguration = {
   /** Full URL of the Chat Completions endpoint. */
   endpoint: string;
   model: string;
-  /** Operations larger than this, encoded as JSON, are escalated unsent. */
+  /** A whole prompt (instructions and operation) longer than this is not sent. */
   maxInputChars: number;
 };
 
@@ -64,11 +64,13 @@ export type PluginConfiguration = {
     agent: {
       /** The reviewer session's model; the main session's when unset. */
       model?: ModelReference;
+      /** Prompts longer than this escalate unsent. */
+      maxInputChars: number;
     };
     timeoutMs: number;
     /** The user's own review policy, added to every review as trusted guidance. */
     instructions?: string;
-    /** Whether decision model reviews are appended to the usage log. */
+    /** Whether decision and chat reviews are appended to the usage log. */
     recordUsage: boolean;
     decision?: DecisionConfiguration;
     chat?: ChatConfiguration;
@@ -93,13 +95,20 @@ const cloudflareModelPattern = /^[a-z\d][a-z\d.-]*$/;
 const defaultMinAllowProbability = 0.6;
 
 /**
- * Jev refuses a `state` above 32Ki tokens; Clef accepts 64Ki but took 46 s for
- * 38k tokens. 28,000 leaves room for the questions and for the estimate.
+ * Jev refuses a `state` above 32Ki tokens, so 28,000 leaves room for the
+ * questions and the estimate. Clef accepts 64Ki but took 46 s for 38k tokens,
+ * past the default timeout, so its budget stays where it answered in seconds.
  */
-const defaultMaxStateTokens = 28_000;
+const defaultMaxStateTokens: Record<DecisionProvider, number> = {
+  typesafe: 28_000,
+  cloudflare: 20_000,
+};
 
-/** Chat models have long contexts; this keeps one review to a bounded cost. */
-const defaultMaxChatInputChars = 400_000;
+/**
+ * LLM reviewers have long contexts; this keeps one review to a bounded cost
+ * and below what a typical model reads whole.
+ */
+const defaultMaxLLMInputChars = 400_000;
 
 const defaultChatBaseURL = "https://api.openai.com/v1";
 
@@ -118,6 +127,7 @@ const modelReferenceSchema = z.object({
 
 const agentOptionsSchema = z.object({
   model: z.optional(modelReferenceSchema),
+  maxInputChars: z.optional(z.int().check(z.gte(1_000), z.lte(4_000_000))),
 });
 
 const decisionOptionsShape = {
@@ -282,7 +292,8 @@ function agentConfiguration(
   reviewer: ReviewerOptions | undefined,
 ): PluginConfiguration["reviewer"]["agent"] {
   const model = reviewer?.agent?.model ?? reviewer?.model;
-  return model === undefined ? {} : { model };
+  const maxInputChars = reviewer?.agent?.maxInputChars ?? defaultMaxLLMInputChars;
+  return model === undefined ? { maxInputChars } : { model, maxInputChars };
 }
 
 /**
@@ -364,7 +375,7 @@ function typeSafeConfiguration(input: {
     endpoint: typeSafeEndpoint(source.baseURL ?? defaultTypeSafeBaseURL),
     model: input.options.model ?? defaultModels.typesafe,
     minAllowProbability: input.options.minAllowProbability ?? defaultMinAllowProbability,
-    maxStateTokens: input.options.maxStateTokens ?? defaultMaxStateTokens,
+    maxStateTokens: input.options.maxStateTokens ?? defaultMaxStateTokens.typesafe,
     onOversize: input.options.onOversize ?? "escalate",
   };
 }
@@ -413,7 +424,7 @@ function cloudflareConfiguration(input: {
     endpoint: `https://api.cloudflare.com/client/v4/accounts/${accountID}/ai/run/@cf/cloudflare/${model}`,
     model,
     minAllowProbability: input.options.minAllowProbability ?? defaultMinAllowProbability,
-    maxStateTokens: input.options.maxStateTokens ?? defaultMaxStateTokens,
+    maxStateTokens: input.options.maxStateTokens ?? defaultMaxStateTokens.cloudflare,
     onOversize: input.options.onOversize ?? "escalate",
   };
 }
@@ -458,7 +469,7 @@ function chatConfiguration(input: { options: unknown; env: Environment }): ChatC
     apiKey: source.apiKey,
     endpoint: chatEndpoint(source.baseURL ?? defaultChatBaseURL),
     model: options.model,
-    maxInputChars: options.maxInputChars ?? defaultMaxChatInputChars,
+    maxInputChars: options.maxInputChars ?? defaultMaxLLMInputChars,
   };
 }
 

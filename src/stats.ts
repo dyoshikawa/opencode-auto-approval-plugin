@@ -93,7 +93,11 @@ export function summarize(input: {
 
 function modelStats(records: UsageRecord[]): ModelStats {
   const [first] = records;
-  const latencies = records.map((record) => record.latencyMs).toSorted((a, b) => a - b);
+  // An oversize record was not sent; its few milliseconds are no latency.
+  const latencies = records
+    .filter((record) => record.verdict !== "oversize")
+    .map((record) => record.latencyMs)
+    .toSorted((a, b) => a - b);
   return {
     provider: first?.provider ?? "",
     model: first?.model ?? "",
@@ -121,7 +125,7 @@ export function formatStats(input: { stats: UsageStats; project?: string }): str
   const { stats } = input;
   const header = `auto-approval stats · ${stats.range} · ${input.project === undefined ? "all projects" : "this project"}`;
   if (stats.reviews === 0) {
-    return `${header}\n\nno decision model reviews in this range\n`;
+    return `${header}\n\nno decision or chat reviews in this range\n`;
   }
   const rows = [
     ["provider", "model", "reviews", "tokens in", "tokens out", "cost", "p50 latency"],

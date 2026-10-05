@@ -156,17 +156,18 @@ same System One API:
 }
 ```
 
-| Option                                  | Default                   | Description                                                                          |
-| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------ |
-| `reviewer.backend`                      | `"agent"`                 | `"agent"`, `"chat"` or `"decision"`                                                  |
-| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                                       |
-| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access                |
-| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback)            |
-| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                                       |
-| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior               |
-| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                      |
-| `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)          |
-| `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer |
+| Option                                  | Default                   | Description                                                                                |
+| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------ |
+| `reviewer.backend`                      | `"agent"`                 | `"agent"`, `"chat"` or `"decision"`                                                        |
+| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                                             |
+| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access                      |
+| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback)                  |
+| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                                             |
+| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior                     |
+| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                            |
+| `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)                |
+| `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer       |
+| `reviewer.agent.maxInputChars`          | `400000`                  | The agent reviewer escalates a longer prompt unsent rather than let the session compact it |
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the
@@ -215,7 +216,8 @@ same System One API:
 Jev refuses a `state` over 32Ki tokens, and Clef, which accepts 64Ki, slows to tens of seconds
 past 20,000. Before sending, the plugin estimates the size conservatively (ASCII at 2.5 characters
 a token, any other character at 1.1 tokens: Japanese measured about one token per character on
-both models, so a Japanese file reaches the default 28,000-token budget at about 25,000 characters)
+both models, so a Japanese file reaches Jev's default 28,000-token budget at about 25,000
+characters; Clef's default is 20,000 to stay within the default timeout)
 and treats Jev's `max_tokens_exceeded` the same way. What happens next is
 `reviewer.decision.onOversize`:
 
@@ -225,7 +227,9 @@ and treats Jev's `max_tokens_exceeded` the same way. What happens next is
 | `agent`              | Reviewed by the [agent](#configuration) reviewer, which can also read the file it concerns               |
 | `chat`               | Reviewed by the [chat backend](#chat-backend) in one call, with the whole operation                      |
 
-A fallback reviews the whole operation, so its `allow` stands. Use it where nobody can answer a
+A fallback reviews the whole operation, so its `allow` stands. Choose a fallback model at least as
+careful as the decision model: an operation padded past the budget reaches it instead, and it has
+no `minAllowProbability` gate. Use it where nobody can answer a
 prompt — OpenCode working inside a GitHub Actions workflow, for example — so that a large edit
 does not stop the run. The default stays `escalate`: a fallback can widen what is approved
 automatically, so set it only in configuration you trust, like `baseURL` and
@@ -262,7 +266,15 @@ alone, and the plugin needs an API key of its own.
   such as `OPENROUTER_API_KEY` can be used without writing the key down.
 - The same safeguards apply as for the decision backend: redirects are refused, the timeout covers
   the whole response, errors report the HTTP status only, and an over-long prompt
-  (`context_length_exceeded`) counts as too large.
+  (`context_length_exceeded`, "maximum context length", or HTTP 413) counts as too large.
+- Keep `maxInputChars` within what the server reads whole. Some servers cut an over-long prompt
+  instead of refusing it — Ollama past its `num_ctx`, for one — so the plugin also treats a reply
+  whose reported prompt tokens are implausibly few for the characters sent (more than 12 characters
+  a token) as too large, and restates the task after the operation data.
+- Set `reviewer.chat` — like `onOversize`, `baseURL` and `minAllowProbability` — only in
+  configuration you trust. The same-source rule stops one source redirecting a key from another, but
+  OpenCode substitutes `{env:NAME}` before the plugin sees the options, so a repository's
+  `opencode.json` could pair your own key variable with its own server.
 - The usage log records chat reviews with `provider: "chat"` and the token counts the endpoint
   reports; their cost is left unpriced, since it depends on the provider and model.
 
@@ -272,7 +284,8 @@ Each decision or chat review appends one line to a usage log at
 `$XDG_DATA_HOME/opencode-auto-approval-plugin/usage.jsonl` (`~/.local/share/…` when `XDG_DATA_HOME`
 is unset): the time, provider, model, a hash of the project directory, input and output tokens,
 latency, the verdict (`error` for a failed call, `oversize` for an operation too large to send),
-and the cost at the time of the review. The
+and the cost at the time of the review. An operation handed to a fallback gets two lines: the
+unsent `oversize` attempt and the fallback's review; the latency column leaves `oversize` out. The
 operation, your prompt and the reason are never written, and the file is created readable by you
 only. The project hash keeps the path out of the file but is not a secret — anyone who guesses a
 path can hash it and match it — so treat the log as private before sharing it. Reviews with the
@@ -296,7 +309,7 @@ provider    model       reviews  tokens in  tokens out      cost  p50 latency
 cloudflare  clef            904       431k           0     $0.10       412 ms
 typesafe    jev-latest      380       181k         51k  $0.00760       212 ms
 
-verdicts  allow 81% · escalate 15% · deny 3% · error 1%
+verdicts  allow 81% · escalate 15% · deny 3% · error 1% · oversize 0%
 ```
 
 - Costs use the input prices published on 2026-10-04 (USD per million tokens: Jev $0.042, Clef

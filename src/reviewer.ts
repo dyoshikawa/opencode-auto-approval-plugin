@@ -75,7 +75,8 @@ export function reviewerPrompt(input: { request: ReviewRequest; instructions?: s
     source: input.request.source,
     action: input.request.action,
     resource: input.request.resource,
-    userIntent: input.request.userIntent ?? null,
+    // An empty prompt (an attachment only) is no stated intent.
+    userIntent: input.request.userIntent?.trim() || null,
   });
 
   return [
@@ -93,6 +94,9 @@ export function reviewerPrompt(input: { request: ReviewRequest; instructions?: s
     `--- ${boundary} BEGIN ---`,
     operation,
     `--- ${boundary} END ---`,
+    // Repeated after the data, so a server that silently drops the start of
+    // an over-long prompt still leaves the task, not only the data, in view.
+    `The operation data ended at the ${boundary} END marker. Judge the whole operation and answer with the JSON verdict only.`,
   ].join("\n");
 }
 
@@ -141,3 +145,23 @@ export function estimateTokens(text: string): number {
   }
   return Math.ceil(ascii / 2.5 + other * 1.1);
 }
+
+/**
+ * Some servers cut an over-long prompt instead of refusing it (Ollama past
+ * `num_ctx`, for one). No tokenizer packs more than about six characters of
+ * prose into a token, so a reported count far below the prompt's length means
+ * the model read only part of it, and its answer cannot stand.
+ */
+export function assertReadWhole(input: {
+  model: string;
+  promptChars: number;
+  reportedTokens: number | null;
+}): void {
+  if (input.reportedTokens === null) return;
+  if (input.reportedTokens * MAX_CHARS_PER_TOKEN >= input.promptChars) return;
+  throw new OversizeError(
+    `Operation too large for ${input.model}: the server counted ${input.reportedTokens.toLocaleString("en-US")} tokens for ${input.promptChars.toLocaleString("en-US")} characters, so it likely cut the input.`,
+  );
+}
+
+const MAX_CHARS_PER_TOKEN = 12;

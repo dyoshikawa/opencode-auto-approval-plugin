@@ -483,7 +483,12 @@ describe("DecisionReviewer with an operation too large for the model", () => {
 
   it("sends a large operation whole when it fits, never a preview", async () => {
     const { reviewer, fetch } = oversizeReviewer({
-      response: async () => answer({ choice: "allow" }),
+      response: async () =>
+        Response.json({
+          answers: { verdict: { choice: "allow", probabilities: { allow: 0.9 } } },
+          // What Jev counted for 60,000 characters of code.
+          usage: { input_tokens: 17_882 },
+        }),
     });
     const content = "x".repeat(60_000);
 
@@ -525,5 +530,20 @@ describe("DecisionReviewer with an operation too large for the model", () => {
     const review = reviewer.review(request);
     await expect(review).rejects.toThrow("Decision model request failed with HTTP 400.");
     await expect(review).rejects.not.toBeInstanceOf(OversizeError);
+  });
+
+  it("does not trust an answer from a server that counted far fewer tokens than it was sent", async () => {
+    const { reviewer, records } = oversizeReviewer({
+      response: async () =>
+        Response.json({
+          answers: { verdict: { choice: "allow", probabilities: { allow: 0.99 } } },
+          usage: { input_tokens: 1_000 },
+        }),
+    });
+
+    await expect(
+      reviewer.review({ ...request, resource: { content: "日本語".repeat(6_000) } }),
+    ).rejects.toThrow(/counted 1,000 tokens for [\d,]+ characters, so it likely cut the input/);
+    expect(records).toMatchObject([{ verdict: "oversize", inputTokens: 1_000 }]);
   });
 });

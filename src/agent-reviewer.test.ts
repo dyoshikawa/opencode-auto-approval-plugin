@@ -201,4 +201,24 @@ describe("AgentReviewer", () => {
     expect(decision.verdict).toBe("deny");
     expect(decision.reason).toBe("x".repeat(300));
   });
+
+  it("escalates an operation over its character limit without opening a session", async () => {
+    const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
+    const reviewer = new AgentReviewer({
+      client,
+      configuration: parsePluginConfiguration({
+        options: { reviewer: { agent: { maxInputChars: 1_000 } } },
+      }),
+    });
+
+    await expect(
+      reviewer.review({
+        source: "tool-call",
+        sessionID: "main",
+        action: "write",
+        resource: { content: "x".repeat(5_000) },
+      }),
+    ).rejects.toThrow("Operation too large for the agent reviewer");
+    expect(client.sessions).toEqual([]);
+  });
 });

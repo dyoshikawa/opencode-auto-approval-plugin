@@ -64,12 +64,31 @@ async function send(input: {
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    return { ok: false, status: response.status, text: text.slice(0, MAX_ERROR_BODY_CHARS) };
+    return { ok: false, status: response.status, text: await readHead(response) };
   }
   try {
     return { ok: true, body: await response.json() };
   } catch (error) {
     throw new Error(`${input.label} response was not JSON.`, { cause: error });
   }
+}
+
+/** The start of an error body, read no further than needed. */
+async function readHead(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (text.length < MAX_ERROR_BODY_CHARS) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    // An unreadable error body is classified like an empty one.
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return text.slice(0, MAX_ERROR_BODY_CHARS);
 }

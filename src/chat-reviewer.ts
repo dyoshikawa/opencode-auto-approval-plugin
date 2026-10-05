@@ -3,6 +3,7 @@ import * as z from "zod/mini";
 import type { ChatConfiguration, PluginConfiguration } from "./config.js";
 import { type Fetch, postJSON } from "./http.js";
 import {
+  assertReadWhole,
   OversizeError,
   parseVerdict,
   type Reviewer,
@@ -108,8 +109,13 @@ export class ChatReviewer implements Reviewer {
       label: "Chat model",
     });
     if (!result.ok) {
-      // OpenAI and compatible servers name an over-long prompt this way.
-      if (result.status === 400 && result.text.includes("context_length_exceeded")) {
+      // OpenAI names an over-long prompt `context_length_exceeded`; compatible
+      // servers word it as the maximum context length, or answer 413.
+      if (
+        result.status === 413 ||
+        (result.status === 400 &&
+          /context_length_exceeded|maximum context length/i.test(result.text))
+      ) {
         throw new OversizeError(`Operation too large for ${model} (refused by the API).`);
       }
       throw new Error(`Chat model request failed with HTTP ${result.status}.`);
@@ -121,6 +127,11 @@ export class ChatReviewer implements Reviewer {
     }
     input.tokens.input = completion.data.usage?.prompt_tokens ?? null;
     input.tokens.output = completion.data.usage?.completion_tokens ?? null;
+    assertReadWhole({
+      model,
+      promptChars: prompt.length + systemPrompt.length,
+      reportedTokens: input.tokens.input,
+    });
     const content = completion.data.choices[0]?.message.content;
     if (!content) {
       throw new Error("Chat model response had no content.");

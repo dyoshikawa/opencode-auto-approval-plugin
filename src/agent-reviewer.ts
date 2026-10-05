@@ -1,5 +1,6 @@
 import type { PluginConfiguration } from "./config.js";
 import {
+  OversizeError,
   parseVerdict,
   type Reviewer,
   type ReviewRequest,
@@ -33,6 +34,18 @@ export class AgentReviewer implements Reviewer {
   }
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
+    const text = reviewerPrompt({
+      request: input,
+      instructions: this.#configuration.reviewer.instructions,
+    });
+    const { maxInputChars } = this.#configuration.reviewer.agent;
+    if (text.length > maxInputChars) {
+      // An over-long prompt would be compacted or cut by the session, and the
+      // reviewer would judge a summary.
+      throw new OversizeError(
+        `Operation too large for the agent reviewer (${text.length.toLocaleString("en-US")} characters, limit ${maxInputChars.toLocaleString("en-US")}).`,
+      );
+    }
     const { sessionID } = await this.#client.create({
       model: this.#configuration.reviewer.agent.model ?? input.model,
     });
@@ -40,13 +53,7 @@ export class AgentReviewer implements Reviewer {
 
     try {
       const response = await withTimeout({
-        operation: this.#client.prompt({
-          sessionID,
-          text: reviewerPrompt({
-            request: input,
-            instructions: this.#configuration.reviewer.instructions,
-          }),
-        }),
+        operation: this.#client.prompt({ sessionID, text }),
         timeoutMs: this.#configuration.reviewer.timeoutMs,
       });
       return parseVerdict(response);

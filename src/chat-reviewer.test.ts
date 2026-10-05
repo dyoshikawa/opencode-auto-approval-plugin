@@ -147,4 +147,31 @@ describe("ChatReviewer", () => {
 
     expect(reviewer.isReviewerSession()).toBe(false);
   });
+
+  it("treats a prompt the server visibly cut as too large", async () => {
+    const { reviewer } = chatReviewer({
+      response: async () =>
+        completion({
+          content: '{"verdict":"allow","reason":"looks fine"}',
+          usage: { prompt_tokens: 100, completion_tokens: 9 },
+        }),
+    });
+
+    await expect(
+      reviewer.review({ ...request, resource: { content: "x".repeat(50_000) } }),
+    ).rejects.toBeInstanceOf(OversizeError);
+  });
+
+  it("restates the task after the operation data", async () => {
+    const { reviewer, fetch } = chatReviewer({
+      response: async () => completion({ content: '{"verdict":"allow","reason":"ok"}' }),
+    });
+
+    await reviewer.review(request);
+
+    const prompt: string = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).messages[1].content;
+    expect(prompt.slice(prompt.lastIndexOf("END ---"))).toContain(
+      "answer with the JSON verdict only",
+    );
+  });
 });
