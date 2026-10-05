@@ -4,13 +4,13 @@ import { parsePluginConfiguration } from "./config.js";
 
 function typeSafeOptions(options: Record<string, unknown> = {}) {
   return {
-    reviewer: { backend: "decision-model", decisionModel: { provider: "typesafe", ...options } },
+    reviewer: { backend: "decision", decision: { provider: "typesafe", ...options } },
   };
 }
 
 function cloudflareOptions(options: Record<string, unknown> = {}) {
   return {
-    reviewer: { backend: "decision-model", decisionModel: { provider: "cloudflare", ...options } },
+    reviewer: { backend: "decision", decision: { provider: "cloudflare", ...options } },
   };
 }
 
@@ -20,7 +20,7 @@ describe("parsePluginConfiguration", () => {
   it("uses the safe on-ask defaults", () => {
     expect(parsePluginConfiguration({ options: {}, env: {} })).toEqual({
       mode: "on-ask",
-      reviewer: { backend: "opencode", timeoutMs: 30_000, recordUsage: true },
+      reviewer: { backend: "agent", agent: {}, timeoutMs: 30_000, recordUsage: true },
     });
   });
 
@@ -30,7 +30,7 @@ describe("parsePluginConfiguration", () => {
         options: {
           mode: "all-tools",
           reviewer: {
-            model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
+            agent: { model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" } },
             timeoutMs: 12_000,
           },
         },
@@ -38,8 +38,8 @@ describe("parsePluginConfiguration", () => {
     ).toEqual({
       mode: "all-tools",
       reviewer: {
-        backend: "opencode",
-        model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
+        backend: "agent",
+        agent: { model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" } },
         timeoutMs: 12_000,
         recordUsage: true,
       },
@@ -107,20 +107,20 @@ describe("parsePluginConfiguration", () => {
     });
   });
 
-  it("does not require decision model credentials for the opencode backend", () => {
+  it("does not require decision model credentials for the agent backend", () => {
     expect(
       parsePluginConfiguration({ options: { reviewer: { backend: "opencode" } }, env: {} })
         .reviewer,
-    ).not.toHaveProperty("decisionModel");
+    ).not.toHaveProperty("decision");
   });
 
-  describe("decision-model backend with the typesafe provider", () => {
+  describe("decision backend with the typesafe provider", () => {
     it("reads the key and base URL from the environment with defaults", () => {
       expect(
         parsePluginConfiguration({
           options: typeSafeOptions(),
           env: { TYPESAFE_API_KEY: "env-key" },
-        }).reviewer.decisionModel,
+        }).reviewer.decision,
       ).toEqual({
         provider: "typesafe",
         apiKey: "env-key",
@@ -140,7 +140,7 @@ describe("parsePluginConfiguration", () => {
             minAllowProbability: 0.8,
           }),
           env: { TYPESAFE_API_KEY: "env-key", TYPESAFE_BASE_URL: "https://proxy.example" },
-        }).reviewer.decisionModel,
+        }).reviewer.decision,
       ).toEqual({
         provider: "typesafe",
         apiKey: "option-key",
@@ -155,7 +155,7 @@ describe("parsePluginConfiguration", () => {
         parsePluginConfiguration({
           options: typeSafeOptions(),
           env: { TYPESAFE_API_KEY: "env-key", TYPESAFE_BASE_URL: "https://proxy.example/" },
-        }).reviewer.decisionModel?.endpoint,
+        }).reviewer.decision?.endpoint,
       ).toBe("https://proxy.example/v1/systemone");
     });
 
@@ -164,7 +164,7 @@ describe("parsePluginConfiguration", () => {
         parsePluginConfiguration({
           options: typeSafeOptions({ apiKey: "option-key" }),
           env: { TYPESAFE_BASE_URL: "https://attacker.example" },
-        }).reviewer.decisionModel?.endpoint,
+        }).reviewer.decision?.endpoint,
       ).toBe("https://api.typesafe.ai/v1/systemone");
     });
 
@@ -174,7 +174,7 @@ describe("parsePluginConfiguration", () => {
           options: typeSafeOptions({ baseURL: "https://attacker.example" }),
           env: { TYPESAFE_API_KEY: "env-key" },
         }),
-      ).toThrow("reviewer.decisionModel.baseURL needs reviewer.decisionModel.apiKey");
+      ).toThrow("reviewer.decision.baseURL needs reviewer.decision.apiKey");
     });
 
     it("trims whitespace around the key", () => {
@@ -182,7 +182,7 @@ describe("parsePluginConfiguration", () => {
         parsePluginConfiguration({
           options: typeSafeOptions(),
           env: { TYPESAFE_API_KEY: " env-key\n" },
-        }).reviewer.decisionModel?.apiKey,
+        }).reviewer.decision?.apiKey,
       ).toBe("env-key");
     });
 
@@ -193,7 +193,7 @@ describe("parsePluginConfiguration", () => {
           parsePluginConfiguration({
             options: typeSafeOptions({ apiKey: "key", baseURL }),
             env: {},
-          }).reviewer.decisionModel?.endpoint,
+          }).reviewer.decision?.endpoint,
         ).toBe(`${baseURL}/v1/systemone`);
       },
     );
@@ -203,14 +203,14 @@ describe("parsePluginConfiguration", () => {
         parsePluginConfiguration({
           options: typeSafeOptions({ apiKey: "  " }),
           env: { TYPESAFE_API_KEY: "env-key", TYPESAFE_BASE_URL: " " },
-        }).reviewer.decisionModel,
+        }).reviewer.decision,
       ).toMatchObject({ apiKey: "env-key", endpoint: "https://api.typesafe.ai/v1/systemone" });
       expect(() =>
         parsePluginConfiguration({
           options: typeSafeOptions({ apiKey: "  ", baseURL: "https://attacker.example" }),
           env: { TYPESAFE_API_KEY: "env-key" },
         }),
-      ).toThrow("reviewer.decisionModel.baseURL needs reviewer.decisionModel.apiKey");
+      ).toThrow("reviewer.decision.baseURL needs reviewer.decision.apiKey");
     });
 
     it("treats a blank base URL option as unset", () => {
@@ -218,20 +218,20 @@ describe("parsePluginConfiguration", () => {
         parsePluginConfiguration({
           options: typeSafeOptions({ apiKey: "key", baseURL: " " }),
           env: {},
-        }).reviewer.decisionModel?.endpoint,
+        }).reviewer.decision?.endpoint,
       ).toBe("https://api.typesafe.ai/v1/systemone");
       expect(
         parsePluginConfiguration({
           options: typeSafeOptions({ baseURL: "" }),
           env: { TYPESAFE_API_KEY: "env-key" },
-        }).reviewer.decisionModel?.apiKey,
+        }).reviewer.decision?.apiKey,
       ).toBe("env-key");
     });
 
     it("fails fast without an API key", () => {
       expect(() =>
         parsePluginConfiguration({ options: typeSafeOptions(), env: { TYPESAFE_API_KEY: "  " } }),
-      ).toThrow("needs reviewer.decisionModel.apiKey or TYPESAFE_API_KEY");
+      ).toThrow("needs reviewer.decision.apiKey or TYPESAFE_API_KEY");
     });
 
     it.each([
@@ -259,13 +259,13 @@ describe("parsePluginConfiguration", () => {
     });
   });
 
-  describe("decision-model backend with the cloudflare provider", () => {
+  describe("decision backend with the cloudflare provider", () => {
     it("reads the token and account ID from wrangler's environment variables", () => {
       expect(
         parsePluginConfiguration({
           options: cloudflareOptions(),
           env: { CLOUDFLARE_API_TOKEN: " cf-token\n", CLOUDFLARE_ACCOUNT_ID: accountId },
-        }).reviewer.decisionModel,
+        }).reviewer.decision,
       ).toEqual({
         provider: "cloudflare",
         apiKey: "cf-token",
@@ -286,7 +286,7 @@ describe("parsePluginConfiguration", () => {
             minAllowProbability: 0.8,
           }),
           env: { CLOUDFLARE_API_TOKEN: "env-token", CLOUDFLARE_ACCOUNT_ID: accountId },
-        }).reviewer.decisionModel,
+        }).reviewer.decision,
       ).toEqual({
         provider: "cloudflare",
         apiKey: "option-token",
@@ -301,7 +301,7 @@ describe("parsePluginConfiguration", () => {
         parsePluginConfiguration({
           options: cloudflareOptions({ apiKey: "option-token" }),
           env: { CLOUDFLARE_ACCOUNT_ID: accountId },
-        }).reviewer.decisionModel?.endpoint,
+        }).reviewer.decision?.endpoint,
       ).toContain(`/accounts/${accountId}/`);
     });
 
@@ -311,13 +311,13 @@ describe("parsePluginConfiguration", () => {
           options: cloudflareOptions(),
           env: { CLOUDFLARE_ACCOUNT_ID: accountId },
         }),
-      ).toThrow("needs reviewer.decisionModel.apiKey or CLOUDFLARE_API_TOKEN");
+      ).toThrow("needs reviewer.decision.apiKey or CLOUDFLARE_API_TOKEN");
       expect(() =>
         parsePluginConfiguration({
           options: cloudflareOptions(),
           env: { CLOUDFLARE_API_TOKEN: "cf-token" },
         }),
-      ).toThrow("needs reviewer.decisionModel.accountId or CLOUDFLARE_ACCOUNT_ID");
+      ).toThrow("needs reviewer.decision.accountId or CLOUDFLARE_ACCOUNT_ID");
     });
 
     it("accepts an account ID in uppercase", () => {
@@ -325,7 +325,7 @@ describe("parsePluginConfiguration", () => {
         parsePluginConfiguration({
           options: cloudflareOptions({ apiKey: "key", accountId: accountId.toUpperCase() }),
           env: {},
-        }).reviewer.decisionModel?.endpoint,
+        }).reviewer.decision?.endpoint,
       ).toContain(`/accounts/${accountId}/`);
     });
 
@@ -365,19 +365,19 @@ describe("parsePluginConfiguration", () => {
         parsePluginConfiguration({
           options: cloudflareOptions({ apiKey: "key", accountId, baseURL: "https://x.example" }),
           env: {},
-        }).reviewer.decisionModel?.endpoint,
+        }).reviewer.decision?.endpoint,
       ).toMatch(/^https:\/\/api\.cloudflare\.com\//);
     });
   });
 
-  describe("decision-model backend options", () => {
+  describe("decision backend options", () => {
     it("needs a provider", () => {
       expect(() =>
-        parsePluginConfiguration({ options: { reviewer: { backend: "decision-model" } }, env: {} }),
-      ).toThrow("needs reviewer.decisionModel with a provider");
+        parsePluginConfiguration({ options: { reviewer: { backend: "decision" } }, env: {} }),
+      ).toThrow("needs reviewer.decision with a provider");
       expect(() =>
         parsePluginConfiguration({
-          options: { reviewer: { backend: "decision-model", decisionModel: { apiKey: "key" } } },
+          options: { reviewer: { backend: "decision", decision: { apiKey: "key" } } },
           env: { TYPESAFE_API_KEY: "key" },
         }),
       ).toThrow("Invalid auto-approval plugin options");
@@ -385,22 +385,22 @@ describe("parsePluginConfiguration", () => {
   });
 
   describe("options of an unused backend", () => {
-    it("starts the opencode backend whatever reviewer.decisionModel holds", () => {
+    it("starts the agent backend whatever the decision options hold", () => {
       expect(
         parsePluginConfiguration({
-          options: { reviewer: { decisionModel: { model: "clef" }, jev: "x" } },
+          options: { reviewer: { decision: { model: "clef" }, jev: "x" } },
           env: {},
         }).reviewer.backend,
-      ).toBe("opencode");
+      ).toBe("agent");
     });
 
-    it("refuses reviewer.jev next to the decision-model backend", () => {
+    it("refuses reviewer.jev next to the decision backend", () => {
       expect(() =>
         parsePluginConfiguration({
           options: {
             reviewer: {
-              backend: "decision-model",
-              decisionModel: { provider: "typesafe", apiKey: "key" },
+              backend: "decision",
+              decision: { provider: "typesafe", apiKey: "key" },
               jev: { baseURL: "https://proxy.example" },
             },
           },
@@ -423,6 +423,148 @@ describe("parsePluginConfiguration", () => {
     });
   });
 
+  describe("deprecated names", () => {
+    it("reads backend opencode with reviewer.model as the agent backend", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "opencode",
+              model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
+            },
+          },
+          env: {},
+        }).reviewer,
+      ).toMatchObject({
+        backend: "agent",
+        agent: { model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" } },
+      });
+    });
+
+    it("reads backend decision-model with reviewer.decisionModel as the decision backend", () => {
+      const reviewer = parsePluginConfiguration({
+        options: {
+          reviewer: {
+            backend: "decision-model",
+            decisionModel: { provider: "cloudflare", apiKey: "key", accountId },
+          },
+        },
+        env: {},
+      }).reviewer;
+
+      expect(reviewer.backend).toBe("decision");
+      expect(reviewer.decision).toMatchObject({ provider: "cloudflare", model: "clef" });
+    });
+
+    it("names the deprecated key in its errors", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: { backend: "decision-model", decisionModel: { provider: "cloudflare" } },
+          },
+          env: {},
+        }),
+      ).toThrow("needs reviewer.decisionModel.apiKey or CLOUDFLARE_API_TOKEN");
+    });
+
+    it("refuses a new key next to its deprecated name", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              agent: { model: { providerID: "a", modelID: "b" } },
+              model: { providerID: "c", modelID: "d" },
+            },
+          },
+          env: {},
+        }),
+      ).toThrow("reviewer.model is the deprecated name of reviewer.agent.model");
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "decision",
+              decision: { provider: "typesafe", apiKey: "key" },
+              decisionModel: { provider: "typesafe", apiKey: "key" },
+            },
+          },
+          env: {},
+        }),
+      ).toThrow("reviewer.decisionModel is the deprecated name of reviewer.decision");
+    });
+  });
+
+  describe("mixing a name with its deprecated form", () => {
+    it.each([
+      [
+        "agent",
+        {
+          agent: { model: { providerID: "a", modelID: "b" } },
+          model: { providerID: "c", modelID: "d" },
+        },
+      ],
+      [
+        "decision",
+        {
+          agent: { model: { providerID: "a", modelID: "b" } },
+          model: { providerID: "c", modelID: "d" },
+        },
+      ],
+    ])("refuses reviewer.agent with reviewer.model under the %s backend", (backend, reviewer) => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: { backend, ...reviewer, decision: { provider: "typesafe", apiKey: "k" } },
+          },
+          env: {},
+        }),
+      ).toThrow("reviewer.model is the deprecated name of reviewer.agent.model");
+    });
+
+    it.each(["agent", "decision"])(
+      "refuses reviewer.decision with reviewer.decisionModel under the %s backend",
+      (backend) => {
+        expect(() =>
+          parsePluginConfiguration({
+            options: {
+              reviewer: {
+                backend,
+                decision: { provider: "typesafe", apiKey: "k" },
+                decisionModel: { provider: "typesafe", apiKey: "k" },
+              },
+            },
+            env: {},
+          }),
+        ).toThrow("reviewer.decisionModel is the deprecated name of reviewer.decision");
+      },
+    );
+
+    it.each([
+      ["decision", { decisionModel: { provider: "typesafe", apiKey: "k" } }, "decision"],
+      ["agent", { model: { providerID: "a", modelID: "b" } }, "agent"],
+      ["opencode", { agent: { model: { providerID: "a", modelID: "b" } } }, "agent"],
+    ])("accepts backend %s with options under the other naming", (backend, options, expected) => {
+      expect(
+        parsePluginConfiguration({ options: { reviewer: { backend, ...options } }, env: {} })
+          .reviewer.backend,
+      ).toBe(expected);
+    });
+
+    it("names reviewer.decisionModel in a typesafe error", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "decision-model",
+              decisionModel: { provider: "typesafe", baseURL: "https://proxy.example" },
+            },
+          },
+          env: { TYPESAFE_API_KEY: "k" },
+        }),
+      ).toThrow("reviewer.decisionModel.baseURL needs reviewer.decisionModel.apiKey");
+    });
+  });
+
   describe("deprecated jev backend", () => {
     it("still reads reviewer.jev as the typesafe provider", () => {
       expect(
@@ -431,10 +573,11 @@ describe("parsePluginConfiguration", () => {
           env: {},
         }).reviewer,
       ).toEqual({
-        backend: "decision-model",
+        backend: "decision",
+        agent: {},
         timeoutMs: 30_000,
         recordUsage: true,
-        decisionModel: {
+        decision: {
           provider: "typesafe",
           apiKey: "option-key",
           endpoint: "https://api.typesafe.ai/v1/systemone",
@@ -449,7 +592,7 @@ describe("parsePluginConfiguration", () => {
         parsePluginConfiguration({
           options: { reviewer: { backend: "jev" } },
           env: { TYPESAFE_API_KEY: "env-key" },
-        }).reviewer.decisionModel?.apiKey,
+        }).reviewer.decision?.apiKey,
       ).toBe("env-key");
       expect(() =>
         parsePluginConfiguration({
@@ -459,15 +602,15 @@ describe("parsePluginConfiguration", () => {
       ).toThrow("reviewer.jev.baseURL needs reviewer.jev.apiKey");
     });
 
-    it("refuses reviewer.decisionModel next to backend jev", () => {
+    it.each(["decision", "decisionModel"])("refuses reviewer.%s next to backend jev", (key) => {
       expect(() =>
         parsePluginConfiguration({
           options: {
-            reviewer: { backend: "jev", decisionModel: { provider: "cloudflare", apiKey: "key" } },
+            reviewer: { backend: "jev", [key]: { provider: "cloudflare", apiKey: "key" } },
           },
           env: {},
         }),
-      ).toThrow('reviewer.decisionModel needs reviewer.backend "decision-model"');
+      ).toThrow('the deprecated reviewer.backend "jev" reads reviewer.jev only');
     });
   });
 });

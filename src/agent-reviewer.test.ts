@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { AgentReviewer } from "./agent-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
-import {
-  OpenCodeReviewer,
-  type ReviewSessionClient,
-  userInstructionsPreamble,
-} from "./reviewer.js";
+import { type ReviewSessionClient, userInstructionsPreamble } from "./reviewer.js";
 
 type ReviewPrompt = Parameters<ReviewSessionClient["prompt"]>[0];
 type ReviewSessionOptions = Parameters<ReviewSessionClient["create"]>[0];
@@ -39,7 +36,7 @@ function clientWithResponse(input: { response: string }): ReviewSessionClient & 
 describe("Reviewer", () => {
   it("inherits the main session model when no reviewer model is configured", async () => {
     const client = clientWithResponse({ response: '{"verdict":"allow","reason":"read-only"}' });
-    const reviewer = new OpenCodeReviewer({
+    const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({ options: {} }),
     });
@@ -60,7 +57,7 @@ describe("Reviewer", () => {
 
   it("uses a configured reviewer model in preference to the main session model", async () => {
     const client = clientWithResponse({ response: '{"verdict":"deny","reason":"destructive"}' });
-    const reviewer = new OpenCodeReviewer({
+    const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({
         options: {
@@ -84,7 +81,7 @@ describe("Reviewer", () => {
 
   it("encodes untrusted operation data as JSON inside a fresh random boundary", async () => {
     const client = clientWithResponse({ response: '{"verdict":"escalate","reason":"untrusted"}' });
-    const reviewer = new OpenCodeReviewer({
+    const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({ options: {} }),
     });
@@ -123,7 +120,7 @@ describe("Reviewer", () => {
 
   it("places configured instructions before the untrusted operation data", async () => {
     const client = clientWithResponse({ response: '{"verdict":"allow","reason":"configured"}' });
-    const reviewer = new OpenCodeReviewer({
+    const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({
         options: { reviewer: { instructions: ["`pnpm test` is always safe."] } },
@@ -147,7 +144,7 @@ describe("Reviewer", () => {
 
   it("adds no instruction block when none is configured", async () => {
     const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
-    const reviewer = new OpenCodeReviewer({
+    const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({ options: {} }),
     });
@@ -159,7 +156,7 @@ describe("Reviewer", () => {
 
   it("tracks the reviewer session only while the review is running", async () => {
     const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
-    const reviewer = new OpenCodeReviewer({
+    const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({ options: {} }),
     });
@@ -175,7 +172,7 @@ describe("Reviewer", () => {
 
   it("aborts the reviewer session and fails when the reply is not a verdict", async () => {
     const client = clientWithResponse({ response: "I cannot decide." });
-    const reviewer = new OpenCodeReviewer({
+    const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({ options: {} }),
     });
@@ -189,7 +186,7 @@ describe("Reviewer", () => {
   it("flattens and caps the reason it passes on to the user", async () => {
     const reason = "x".repeat(1000) + "\\u001b[31m\\nmore";
     const client = clientWithResponse({ response: `{"verdict":"deny","reason":"${reason}"}` });
-    const reviewer = new OpenCodeReviewer({
+    const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({ options: {} }),
     });

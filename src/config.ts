@@ -2,24 +2,29 @@ import * as z from "zod/mini";
 
 const reviewerModes = ["on-ask", "all-tools"] as const;
 
-/** `jev` is the deprecated name of `decision-model` with the `typesafe` provider. */
-const reviewerBackends = ["opencode", "decision-model", "jev"] as const;
+/**
+ * `agent` reviews in a read-only OpenCode session, `decision` asks a decision
+ * model. The rest are deprecated names kept working: `opencode` is `agent`,
+ * `decision-model` is `decision`, and `jev` is `decision` with the `typesafe`
+ * provider read from `reviewer.jev`.
+ */
+const reviewerBackends = ["agent", "decision", "opencode", "decision-model", "jev"] as const;
 
-const decisionModelProviders = ["typesafe", "cloudflare"] as const;
+const decisionProviders = ["typesafe", "cloudflare"] as const;
 
 type ReviewerMode = (typeof reviewerModes)[number];
 
-type ReviewerBackend = "opencode" | "decision-model";
+type ReviewerBackend = "agent" | "decision";
 
-export type DecisionModelProvider = (typeof decisionModelProviders)[number];
+export type DecisionProvider = (typeof decisionProviders)[number];
 
 export type ModelReference = {
   providerID: string;
   modelID: string;
 };
 
-export type DecisionModelConfiguration = {
-  provider: DecisionModelProvider;
+export type DecisionConfiguration = {
+  provider: DecisionProvider;
   apiKey: string;
   /** Full URL of the System One compatible decision endpoint. */
   endpoint: string;
@@ -32,13 +37,16 @@ export type PluginConfiguration = {
   mode: ReviewerMode;
   reviewer: {
     backend: ReviewerBackend;
-    model?: ModelReference;
+    agent: {
+      /** The reviewer session's model; the main session's when unset. */
+      model?: ModelReference;
+    };
     timeoutMs: number;
     /** The user's own review policy, added to every review as trusted guidance. */
     instructions?: string;
     /** Whether decision model reviews are appended to the usage log. */
     recordUsage: boolean;
-    decisionModel?: DecisionModelConfiguration;
+    decision?: DecisionConfiguration;
   };
 };
 
@@ -46,7 +54,7 @@ type Environment = Record<string, string | undefined>;
 
 const defaultTypeSafeBaseURL = "https://api.typesafe.ai";
 
-const defaultModels: Record<DecisionModelProvider, string> = {
+const defaultModels: Record<DecisionProvider, string> = {
   typesafe: "jev-latest",
   cloudflare: "clef",
 };
@@ -61,7 +69,7 @@ const defaultMinAllowProbability = 0.6;
 
 /**
  * Custom instructions are sent with every review (and billed per call with the
- * decision-model backend), so they are kept to a short policy rather than a document.
+ * decision backend), so they are kept to a short policy rather than a document.
  */
 const MAX_INSTRUCTIONS_CHARS = 4_000;
 
@@ -72,22 +80,26 @@ const modelReferenceSchema = z.object({
   modelID: z.string(),
 });
 
-const decisionModelOptionsShape = {
+const agentOptionsSchema = z.object({
+  model: z.optional(modelReferenceSchema),
+});
+
+const decisionOptionsShape = {
   apiKey: z.optional(z.string()),
   model: z.optional(z.string().check(z.minLength(1))),
   minAllowProbability: z.optional(z.number().check(z.gte(0), z.lte(1))),
 };
 
 const typeSafeOptionsSchema = z.object({
-  ...decisionModelOptionsShape,
+  ...decisionOptionsShape,
   baseURL: z.optional(z.string()),
 });
 
-const decisionModelOptionsSchema = z.discriminatedUnion("provider", [
+const decisionOptionsSchema = z.discriminatedUnion("provider", [
   z.object({ provider: z.literal("typesafe"), ...typeSafeOptionsSchema.shape }),
   z.object({
     provider: z.literal("cloudflare"),
-    ...decisionModelOptionsShape,
+    ...decisionOptionsShape,
     accountId: z.optional(z.string()),
   }),
 ]);
@@ -97,12 +109,15 @@ const pluginConfigurationSchema = z.object({
   reviewer: z.optional(
     z.object({
       backend: z.optional(z.enum(reviewerBackends)),
+      agent: z.optional(agentOptionsSchema),
+      /** Deprecated: `agent.model`. */
       model: z.optional(modelReferenceSchema),
       timeoutMs: z.optional(z.number().check(z.gte(1), z.lte(120_000))),
       instructions: z.optional(z.union([z.string(), z.array(z.string())])),
       recordUsage: z.optional(z.boolean()),
-      // Checked only when the decision-model backend reads them, so another
-      // backend starts whatever they hold.
+      // Checked only when the decision backend reads them, so another backend
+      // starts whatever they hold. `decisionModel` and `jev` are deprecated.
+      decision: z.optional(z.unknown()),
       decisionModel: z.optional(z.unknown()),
       jev: z.optional(z.unknown()),
     }),
@@ -110,7 +125,8 @@ const pluginConfigurationSchema = z.object({
 });
 
 /**
- * Parses the plugin options. `env` supplies the decision model credentials
+ * Parses the plugin options, deprecated names included. `env` supplies the
+ * decision model credentials
  * when the options leave them out; options always take precedence.
  */
 export function parsePluginConfiguration(input: {
@@ -123,23 +139,24 @@ export function parsePluginConfiguration(input: {
   }
 
   const reviewer = result.data.reviewer;
+  rejectMixedNames(reviewer);
   const backend: ReviewerBackend =
-    reviewer?.backend === undefined || reviewer.backend === "opencode"
-      ? "opencode"
-      : "decision-model";
+    reviewer?.backend === undefined ||
+    reviewer.backend === "agent" ||
+    reviewer.backend === "opencode"
+      ? "agent"
+      : "decision";
   const instructions = reviewerInstructions(reviewer?.instructions);
   const env = input.env ?? process.env;
   return {
     mode: result.data.mode ?? "on-ask",
     reviewer: {
       backend,
-      model: reviewer?.model,
+      agent: agentConfiguration(reviewer),
       timeoutMs: reviewer?.timeoutMs ?? 30_000,
       ...(instructions === undefined ? {} : { instructions }),
       recordUsage: reviewer?.recordUsage ?? true,
-      ...(backend === "decision-model"
-        ? { decisionModel: decisionModelConfiguration({ reviewer, env }) }
-        : {}),
+      ...(backend === "decision" ? { decision: decisionConfiguration({ reviewer, env }) } : {}),
     },
   };
 }
@@ -165,18 +182,49 @@ function reviewerInstructions(input: string | string[] | undefined): string | un
 
 type ReviewerOptions = NonNullable<z.infer<typeof pluginConfigurationSchema>["reviewer"]>;
 
-type DecisionModelOptions = z.infer<typeof decisionModelOptionsSchema>;
+type DecisionOptions = z.infer<typeof decisionOptionsSchema>;
 
-/** Resolves `decisionModel`, or the deprecated `backend: "jev"` with `jev`. */
-function decisionModelConfiguration(input: {
+/**
+ * A key next to its deprecated name fails for every backend, so neither is
+ * silently ignored. Only pairs with a new key are checked: a configuration
+ * from an earlier version cannot contain one, so none of those start failing.
+ */
+function rejectMixedNames(reviewer: ReviewerOptions | undefined): void {
+  const pairs = [
+    ["agent", "model", "reviewer.agent.model"],
+    ["decision", "decisionModel", "reviewer.decision"],
+  ] as const;
+  for (const [current, deprecated, replacement] of pairs) {
+    if (reviewer?.[current] !== undefined && reviewer[deprecated] !== undefined) {
+      throw new Error(
+        `Invalid auto-approval plugin options: reviewer.${deprecated} is the deprecated name of ${replacement}; set only one.`,
+      );
+    }
+  }
+}
+
+/** `agent.model`, or the deprecated `reviewer.model`. */
+function agentConfiguration(
+  reviewer: ReviewerOptions | undefined,
+): PluginConfiguration["reviewer"]["agent"] {
+  const model = reviewer?.agent?.model ?? reviewer?.model;
+  return model === undefined ? {} : { model };
+}
+
+/**
+ * Resolves `decision`, or one of its deprecated forms: `decisionModel`, or
+ * `backend: "jev"` with `jev`. Mixing a form with another fails, so a setting
+ * cannot be silently ignored.
+ */
+function decisionConfiguration(input: {
   reviewer: ReviewerOptions | undefined;
   env: Environment;
-}): DecisionModelConfiguration {
+}): DecisionConfiguration {
   const reviewer = input.reviewer;
   if (reviewer?.backend === "jev") {
-    if (reviewer.decisionModel !== undefined) {
+    if (reviewer.decision !== undefined || reviewer.decisionModel !== undefined) {
       throw new Error(
-        'Invalid auto-approval plugin options: reviewer.decisionModel needs reviewer.backend "decision-model"; "jev" reads reviewer.jev.',
+        'Invalid auto-approval plugin options: the deprecated reviewer.backend "jev" reads reviewer.jev only; use reviewer.backend "decision" with reviewer.decision.',
       );
     }
     const jev = parseOptions({
@@ -192,30 +240,29 @@ function decisionModelConfiguration(input: {
   }
   if (reviewer?.jev !== undefined) {
     throw new Error(
-      'Invalid auto-approval plugin options: reviewer.jev is only read with the deprecated reviewer.backend "jev"; move it to reviewer.decisionModel.',
+      'Invalid auto-approval plugin options: reviewer.jev is only read with the deprecated reviewer.backend "jev"; move it to reviewer.decision.',
     );
   }
-  if (reviewer?.decisionModel === undefined) {
+  const prefix =
+    reviewer?.decisionModel === undefined ? "reviewer.decision" : "reviewer.decisionModel";
+  const value = reviewer?.decision ?? reviewer?.decisionModel;
+  if (value === undefined) {
     throw new Error(
-      'Invalid auto-approval plugin options: the decision-model backend needs reviewer.decisionModel with a provider ("typesafe" or "cloudflare").',
+      'Invalid auto-approval plugin options: the decision backend needs reviewer.decision with a provider ("typesafe" or "cloudflare").',
     );
   }
-  const options = parseOptions({
-    schema: decisionModelOptionsSchema,
-    value: reviewer.decisionModel,
-    prefix: "reviewer.decisionModel",
-  });
+  const options = parseOptions({ schema: decisionOptionsSchema, value, prefix });
   return options.provider === "typesafe"
-    ? typeSafeConfiguration({ options, env: input.env, prefix: "reviewer.decisionModel" })
-    : cloudflareConfiguration({ options, env: input.env });
+    ? typeSafeConfiguration({ options, env: input.env, prefix })
+    : cloudflareConfiguration({ options, env: input.env, prefix });
 }
 
 function typeSafeConfiguration(input: {
-  options: Extract<DecisionModelOptions, { provider: "typesafe" }>;
+  options: Extract<DecisionOptions, { provider: "typesafe" }>;
   env: Environment;
   /** Where the options were written, for error messages. */
   prefix: string;
-}): DecisionModelConfiguration {
+}): DecisionConfiguration {
   // The key and the base URL must come from the same place: whoever serves
   // the base URL receives the key and decides every verdict, so one source
   // must not be able to redirect a key supplied by another.
@@ -252,14 +299,16 @@ function typeSafeConfiguration(input: {
  * secret and may come from the options or the environment independently.
  */
 function cloudflareConfiguration(input: {
-  options: Extract<DecisionModelOptions, { provider: "cloudflare" }>;
+  options: Extract<DecisionOptions, { provider: "cloudflare" }>;
   env: Environment;
-}): DecisionModelConfiguration {
+  /** Where the options were written, for error messages. */
+  prefix: string;
+}): DecisionConfiguration {
   const apiKey =
     nonEmpty(input.options.apiKey?.trim()) ?? nonEmpty(input.env.CLOUDFLARE_API_TOKEN?.trim());
   if (apiKey === undefined) {
     throw new Error(
-      "Invalid auto-approval plugin options: the cloudflare provider needs reviewer.decisionModel.apiKey or CLOUDFLARE_API_TOKEN.",
+      `Invalid auto-approval plugin options: the cloudflare provider needs ${input.prefix}.apiKey or CLOUDFLARE_API_TOKEN.`,
     );
   }
   // Account IDs are hexadecimal; the dashboard shows them in lowercase.
@@ -268,7 +317,7 @@ function cloudflareConfiguration(input: {
   )?.toLowerCase();
   if (accountID === undefined) {
     throw new Error(
-      "Invalid auto-approval plugin options: the cloudflare provider needs reviewer.decisionModel.accountId or CLOUDFLARE_ACCOUNT_ID.",
+      `Invalid auto-approval plugin options: the cloudflare provider needs ${input.prefix}.accountId or CLOUDFLARE_ACCOUNT_ID.`,
     );
   }
   if (!cloudflareAccountIDPattern.test(accountID)) {

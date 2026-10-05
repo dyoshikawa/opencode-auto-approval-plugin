@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 
 import * as z from "zod/mini";
 
-import type { DecisionModelProvider } from "./config.js";
+import type { DecisionProvider } from "./config.js";
 
 /**
  * One line of the usage log: what a decision model review cost. It never holds
@@ -46,19 +46,19 @@ const cloudflarePrices = new Map([
  * Input prices in USD per million tokens, as published on 2026-10-04. Output
  * tokens are free on both APIs (Clef reports none).
  */
-const inputPricePerMillion: Record<DecisionModelProvider, (model: string) => number | undefined> = {
+const inputPricePerMillion: Record<DecisionProvider, (model: string) => number | undefined> = {
   typesafe: (model) => (model.startsWith("jev") ? 0.042 : undefined),
   cloudflare: (model) => cloudflarePrices.get(model),
 };
 
-const officialEndpoints: Record<DecisionModelProvider, string> = {
+const officialEndpoints: Record<DecisionProvider, string> = {
   typesafe: "https://api.typesafe.ai/",
   cloudflare: "https://api.cloudflare.com/",
 };
 
 /** The cost at the published price; `null` when it is unknown, as for a self-hosted endpoint. */
 export function costUSD(input: {
-  provider: DecisionModelProvider;
+  provider: DecisionProvider;
   endpoint: string;
   model: string;
   inputTokens: number | null;

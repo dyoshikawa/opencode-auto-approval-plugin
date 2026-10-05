@@ -105,12 +105,12 @@ describe("V2 plugin (opencode 2.x)", () => {
     });
   });
 
-  it("registers no subagent for the decision-model backend", async () => {
+  it("registers no subagent for the decision backend", async () => {
     const { context, agents } = createContext({
       options: {
         reviewer: {
-          backend: "decision-model",
-          decisionModel: { provider: "typesafe", apiKey: "test-key" },
+          backend: "decision",
+          decision: { provider: "typesafe", apiKey: "test-key" },
         },
       },
     });
@@ -187,12 +187,12 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(isReviewerSession).toHaveBeenCalledWith({ sessionID: "review-session" });
   });
 
-  it("reviews an agent that merely shares the reviewer's name under the decision-model backend", async () => {
+  it("reviews an agent that merely shares the reviewer's name under the decision backend", async () => {
     const { context, hooks } = createContext({
       options: {
         reviewer: {
-          backend: "decision-model",
-          decisionModel: { provider: "typesafe", apiKey: "test-key" },
+          backend: "decision",
+          decision: { provider: "typesafe", apiKey: "test-key" },
         },
       },
     });

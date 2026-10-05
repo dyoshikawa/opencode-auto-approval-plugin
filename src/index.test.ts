@@ -51,8 +51,8 @@ describe("plugin entrypoint", () => {
         options: {
           mode: "all-tools",
           reviewer: {
-            backend: "decision-model",
-            decisionModel: { provider: "typesafe", apiKey: "test-key" },
+            backend: "decision",
+            decision: { provider: "typesafe", apiKey: "test-key" },
           },
         },
         location: { directory: "/workspace" },

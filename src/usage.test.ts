@@ -3,8 +3,16 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as z from "zod/mini";
 
-import { costUSD, fileUsageRecorder, projectID, type UsageRecord, usageLogPath } from "./usage.js";
+import {
+  costUSD,
+  fileUsageRecorder,
+  projectID,
+  type UsageRecord,
+  usageLogPath,
+  usageRecordSchema,
+} from "./usage.js";
 
 const record: UsageRecord = {
   v: 1,
@@ -23,6 +31,15 @@ const endpoints = {
   typesafe: "https://api.typesafe.ai/v1/systemone",
   cloudflare: "https://api.cloudflare.com/client/v4/accounts/x/ai/run/@cf/cloudflare/clef",
 } as const;
+
+describe("usageRecordSchema", () => {
+  it("still reads a line written by v0.5.0", () => {
+    const line =
+      '{"v":1,"time":"2026-10-04T14:14:43.536Z","provider":"cloudflare","model":"clef","project":"4de1d2f8b60db00a","inputTokens":219,"outputTokens":0,"latencyMs":449,"verdict":"deny","costUSD":0.00005256}';
+
+    expect(z.safeParse(usageRecordSchema, JSON.parse(line)).success).toBe(true);
+  });
+});
 
 describe("costUSD", () => {
   it.each([

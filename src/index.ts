@@ -1,5 +1,5 @@
-import { DecisionModelReviewer } from "./decision-model-reviewer.js";
-import { OpenCodeReviewer } from "./reviewer.js";
+import { AgentReviewer } from "./agent-reviewer.js";
+import { DecisionReviewer } from "./decision-reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { fileUsageRecorder, projectID, usageLogPath } from "./usage.js";
 import { createV1Plugin } from "./v1.js";
@@ -7,8 +7,8 @@ import { createV2Plugin } from "./v2.js";
 
 const defaultDependencies: PluginDependencies = {
   createReviewer: (input) =>
-    input.configuration.reviewer.backend === "decision-model"
-      ? new DecisionModelReviewer({
+    input.configuration.reviewer.backend === "decision"
+      ? new DecisionReviewer({
           configuration: input.configuration,
           // Reviews in an opencode session already count in `opencode stats`;
           // decision model calls are logged for this package's `stats`.
@@ -19,7 +19,7 @@ const defaultDependencies: PluginDependencies = {
               }
             : {}),
         })
-      : new OpenCodeReviewer(input),
+      : new AgentReviewer(input),
 };
 
 /**

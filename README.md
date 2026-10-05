@@ -3,10 +3,14 @@
 An [OpenCode](https://opencode.ai/) plugin that sends tool operations to a read-only AI reviewer
 before automatically approving them.
 
-By default the reviewer runs in its own OpenCode session. It may inspect the workspace with `read`,
-`glob`, `grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP
-tools, or start subagents. Alternatively, decisions can be delegated to the
-[decision model](#decision-model-reviewer-backend) over HTTP — TypeSafe AI's Jev or Cloudflare's Clef.
+The reviewer is one of two backends:
+
+| `reviewer.backend` | How it reviews                                                                                                                                                                                             |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent` (default)  | An LLM in its own OpenCode session. It may inspect the workspace with `read`, `glob`, `grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or start subagents. |
+| `decision`         | A [decision model](#decision-backend) over HTTP — TypeSafe AI's Jev or Cloudflare's Clef — that picks `allow`, `deny` or `escalate` with calibrated probabilities in one call.                             |
+
+Names used by earlier versions keep working; see [deprecated names](#deprecated-names).
 
 ## Supported OpenCode versions
 
@@ -90,8 +94,8 @@ OpenCode 1.x uses a plugin tuple instead:
 }
 ```
 
-Set `reviewer.model` to run reviews through a separately configured OpenCode provider and model.
-With the default `opencode` backend the plugin never reads or manages API keys; authentication
+Set `reviewer.agent.model` to run reviews through a separately configured OpenCode provider and
+model. With the default `agent` backend the plugin never reads or manages API keys; authentication
 remains entirely in OpenCode.
 
 ```jsonc
@@ -102,9 +106,11 @@ remains entirely in OpenCode.
       "options": {
         "mode": "all-tools",
         "reviewer": {
-          "model": {
-            "providerID": "openrouter",
-            "modelID": "openai/gpt-5.6-luna",
+          "agent": {
+            "model": {
+              "providerID": "openrouter",
+              "modelID": "openai/gpt-5.6-luna",
+            },
           },
           "timeoutMs": 15000,
         },
@@ -114,10 +120,10 @@ remains entirely in OpenCode.
 }
 ```
 
-### Decision model reviewer backend
+### Decision backend
 
-Set `reviewer.backend` to `"decision-model"` to have a decision model judge each operation instead
-of an OpenCode session. The plugin sends one request with the operation (`source`, `action`,
+Set `reviewer.backend` to `"decision"` to have a decision model judge each operation instead of an
+OpenCode session. The plugin sends one request with the operation (`source`, `action`,
 `resource`, and the user's latest prompt) and a single `allow` / `deny` / `escalate` choice. No
 reviewer agent or session is created and the workspace is not inspected. Two providers speak the
 same System One API:
@@ -135,9 +141,9 @@ same System One API:
       "options": {
         "mode": "on-ask",
         "reviewer": {
-          "backend": "decision-model",
+          "backend": "decision",
           "timeoutMs": 10000,
-          "decisionModel": {
+          "decision": {
             "provider": "cloudflare", // or "typesafe"
             "model": "clef",
             "minAllowProbability": 0.6,
@@ -149,15 +155,15 @@ same System One API:
 }
 ```
 
-| Option                                       | Default                   | Description                                                               |
-| -------------------------------------------- | ------------------------- | ------------------------------------------------------------------------- |
-| `reviewer.backend`                           | `"opencode"`              | `"opencode"` (reviewer session) or `"decision-model"`                     |
-| `reviewer.decisionModel.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                            |
-| `reviewer.decisionModel.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access     |
-| `reviewer.decisionModel.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback) |
-| `reviewer.decisionModel.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                            |
-| `reviewer.decisionModel.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior    |
-| `reviewer.decisionModel.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`           |
+| Option                                  | Default                   | Description                                                               |
+| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------- |
+| `reviewer.backend`                      | `"agent"`                 | `"agent"` (reviewer session) or `"decision"`                              |
+| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                            |
+| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access     |
+| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback) |
+| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                            |
+| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior    |
+| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`           |
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the
@@ -165,9 +171,9 @@ same System One API:
   URL. The variables are read by the process that loads the plugin: if OpenCode 2.x's background
   service was already running, run `opencode service restart` after exporting them.
 - `typesafe`: the key and the base URL come from the same place. With
-  `reviewer.decisionModel.apiKey`, only `reviewer.decisionModel.baseURL` applies
+  `reviewer.decision.apiKey`, only `reviewer.decision.baseURL` applies
   (`TYPESAFE_BASE_URL` is ignored); with `TYPESAFE_API_KEY`, only `TYPESAFE_BASE_URL` applies, and
-  setting `reviewer.decisionModel.baseURL` without a key next to it fails at startup. This keeps
+  setting `reviewer.decision.baseURL` without a key next to it fails at startup. This keeps
   one source from redirecting a key supplied by another.
 - `cloudflare`: requests always go to
   `https://api.cloudflare.com/client/v4/accounts/<accountId>/ai/run/@cf/cloudflare/<model>`; there
@@ -198,13 +204,9 @@ same System One API:
 - Redirects are refused so the API key is never forwarded to another host, and the timeout covers
   the whole request including the response body. HTTP errors (`402` out of credit, `429` rate
   limited, `5xx` outage) are reported by status only and handled like any other reviewer failure.
-- `reviewer.model` has no effect with the `decision-model` backend, and `reviewer.decisionModel`
-  none with `opencode`. Aliases such as `jev-latest` follow new model releases, which may shift
+- `reviewer.agent` has no effect with the `decision` backend, and `reviewer.decision`
+  none with the `agent` backend. Aliases such as `jev-latest` follow new model releases, which may shift
   verdicts; pin a version for stable behavior.
-- Deprecated: `backend: "jev"` with `reviewer.jev` (`apiKey`, `baseURL`, `model`,
-  `minAllowProbability`) from v0.3 still works and means `decision-model` with the `typesafe`
-  provider. Combining it with `reviewer.decisionModel` fails at startup, and so does
-  `reviewer.jev` next to `backend: "decision-model"`.
 
 ### Usage and cost statistics
 
@@ -215,7 +217,7 @@ latency, the verdict (`error` for a failed call), and the cost at the time of th
 operation, your prompt and the reason are never written, and the file is created readable by you
 only. The project hash keeps the path out of the file but is not a secret — anyone who guesses a
 path can hash it and match it — so treat the log as private before sharing it. Reviews with the
-`opencode` backend run in OpenCode sessions, so `opencode stats` already counts them.
+`agent` backend run in OpenCode sessions, so `opencode stats` already counts them.
 
 Show the totals with the bundled command, modelled on `opencode stats`:
 
@@ -273,17 +275,31 @@ string.
 
 - Both backends receive the instructions as trusted guidance that takes precedence over the
   built-in safety guidance — though never over the answer format or the rule that operation data
-  is untrusted, so text inside a command or file cannot pose as your instructions: the `opencode`
-  reviewer reads them in its prompt ahead of the operation data, and the `decision-model` backend
+  is untrusted, so text inside a command or file cannot pose as your instructions: the `agent`
+  backend reads them in its prompt ahead of the operation data, and the `decision` backend
   appends them to the question's `instructions`, never to the state it judges.
 - They are guidance for an AI reviewer, not deterministic rules: the reviewer still sees the whole
   operation and may decide otherwise. Use OpenCode's own permission rules (`permissions` on 2.x,
   `permission` on 1.x) when a tool must always be allowed or denied. Explicit OpenCode `deny` rules still always win.
 - Blank entries are ignored, and the joined text may be at most 4,000 characters. With the
-  `decision-model` backend the instructions are sent, and billed, with every review.
+  `decision` backend the instructions are sent, and billed, with every review.
 - Instructions can widen what is approved automatically, so set them only in configuration you
   trust, like `baseURL` and `minAllowProbability` — not in a repository's `opencode.json` you have
   not reviewed.
+
+### Deprecated names
+
+Earlier versions used other names for the backends and their options. They are still accepted and
+mean the same thing, with no removal date yet; setting a name next to its replacement fails at
+startup so that neither is silently ignored.
+
+| Deprecated                                       | Use instead                                       |
+| ------------------------------------------------ | ------------------------------------------------- |
+| `backend: "opencode"`                            | `backend: "agent"`                                |
+| `reviewer.model`                                 | `reviewer.agent.model`                            |
+| `backend: "decision-model"` (v0.5)               | `backend: "decision"`                             |
+| `reviewer.decisionModel` (v0.5)                  | `reviewer.decision`                               |
+| `backend: "jev"` with `reviewer.jev` (v0.3–v0.4) | `backend: "decision"` with `provider: "typesafe"` |
 
 ### Review modes
 
@@ -302,7 +318,7 @@ OpenCode's plugin API does not provide a way to create and await a new permissio
 `tool.execute.before`. Therefore, `all-tools` fails closed for an `escalate` verdict: the tool does
 not run and the user must explicitly retry after reviewing the reported reason.
 
-Both modes work the same way with either reviewer backend, except that the decision-model backend always
+Both modes work the same way with either reviewer backend, except that the decision backend always
 escalates an operation too large to send in full (see above).
 
 Explicit OpenCode `deny` rules always remain in effect. The plugin is an additional review layer;
