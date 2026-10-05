@@ -215,7 +215,7 @@ describe("AgentReviewer", () => {
     const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({
-        options: { reviewer: { agent: { maxInputChars: 1_000 } } },
+        options: { reviewer: { agent: { maxInputBytes: 1_000 } } },
       }),
     });
 

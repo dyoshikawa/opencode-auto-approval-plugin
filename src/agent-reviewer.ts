@@ -41,12 +41,13 @@ export class AgentReviewer implements Reviewer {
       instructions: this.#configuration.reviewer.instructions,
       check,
     });
-    const { maxInputChars } = this.#configuration.reviewer.agent;
-    if (text.length > maxInputChars) {
+    const { maxInputBytes } = this.#configuration.reviewer.agent;
+    const bytes = Buffer.byteLength(text, "utf8");
+    if (bytes > maxInputBytes) {
       // An over-long prompt would be compacted or cut by the session, and the
       // reviewer would judge a summary.
       throw new OversizeError(
-        `Operation too large for the agent reviewer (${text.length.toLocaleString("en-US")} characters, limit ${maxInputChars.toLocaleString("en-US")}).`,
+        `Operation too large for the agent reviewer (${bytes.toLocaleString("en-US")} bytes, limit ${maxInputBytes.toLocaleString("en-US")}).`,
       );
     }
     const { sessionID } = await this.#client.create({

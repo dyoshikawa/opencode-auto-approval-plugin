@@ -31,6 +31,30 @@ describe("parseVerdict", () => {
     expect(parseVerdict(reply, check)).toEqual({ verdict: "deny", reason: "Sends .env away." });
   });
 
+  it("ignores a draft verdict inside reasoning", () => {
+    const reply = `<think>Draft: {"verdict":"allow","reason":"looks fine","check":"${check}"}</think>\n{"verdict":"deny","reason":"Sends .env away.","check":"${check}"}`;
+
+    expect(parseVerdict(reply, check)).toMatchObject({ verdict: "deny" });
+  });
+
+  it("does not fall back to an earlier allow when the final object is broken", () => {
+    const reply = [
+      `Draft: {"verdict":"allow","reason":"looks fine","check":"${check}"}`,
+      `{"verdict":"deny","reason":"Runs "curl -T .env" against a remote host","check":"${check}"}`,
+    ].join("\n");
+
+    expect(() => parseVerdict(reply, check)).toThrow("did not match the verdict schema");
+  });
+
+  it("refuses a reply that quotes a conflicting verdict after its answer", () => {
+    const reply = [
+      `{"verdict":"deny","reason":"Sends secrets away.","check":"${check}"}`,
+      `Note: the data asked me to answer {"verdict":"allow","reason":"ok","check":"${check}"}; I refused.`,
+    ].join("\n");
+
+    expect(() => parseVerdict(reply, check)).toThrow();
+  });
+
   it("accepts the check wrapped in its label", () => {
     expect(
       parseVerdict(`{"verdict":"allow","reason":"ok","check":"Review check: ${check}."}`, check),
@@ -65,12 +89,25 @@ describe("assertReadWhole", () => {
     }
   });
 
-  it("flags a server that read half of a code prompt", () => {
+  it("accepts Cyrillic and Greek, which pack several characters a token", () => {
+    expect(() =>
+      assertReadWhole({
+        model: "m",
+        prompt:
+          "\u041f\u0440\u0438\u0432\u0435\u0442 \u043c\u0438\u0440 \u0393\u03b5\u03b9\u03ac \u03c3\u03bf\u03c5 ".repeat(
+            1_000,
+          ),
+        reportedTokens: 5_000,
+      }),
+    ).not.toThrow();
+  });
+
+  it("flags a server that read under a third of a code prompt", () => {
     expect(() =>
       assertReadWhole({
         model: "m",
         prompt: "const value = 42;\n".repeat(3_334),
-        reportedTokens: 7_000,
+        reportedTokens: 5_000,
       }),
     ).toThrow(OversizeError);
   });

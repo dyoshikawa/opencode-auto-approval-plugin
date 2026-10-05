@@ -31,7 +31,7 @@ function echoCheck(reply: string, prompt: string): string {
 
 function chatReviewer(input: {
   response: () => Promise<Response>;
-  maxInputChars?: number;
+  maxInputBytes?: number;
   instructions?: string[];
 }) {
   const records: UsageRecord[] = [];
@@ -57,7 +57,7 @@ function chatReviewer(input: {
             baseURL: "https://openrouter.ai/api/v1/",
             apiKey: "or-key",
             model: "openai/gpt-5.6-luna",
-            maxInputChars: input.maxInputChars,
+            maxInputBytes: input.maxInputBytes,
           },
         },
       },
@@ -125,7 +125,7 @@ describe("ChatReviewer", () => {
 
   it("does not send an operation over its character limit", async () => {
     const { reviewer, fetch, records } = chatReviewer({
-      maxInputChars: 5_000,
+      maxInputBytes: 5_000,
       response: async () => completion({ content: '{"verdict":"allow","reason":"ok"}' }),
     });
 
@@ -218,5 +218,18 @@ describe("ChatReviewer", () => {
 
       await expect(reviewer.review(request)).resolves.toMatchObject({ verdict: "allow" });
     }
+  });
+
+  it("measures its limit in UTF-8 bytes, so multi-byte padding cannot slip past it", async () => {
+    const { reviewer, fetch } = chatReviewer({
+      maxInputBytes: 20_000,
+      response: async () => completion({ content: '{"verdict":"allow","reason":"ok"}' }),
+    });
+
+    // 10,000 UTF-16 code units, but 20,000 bytes.
+    await expect(
+      reviewer.review({ ...request, resource: { content: "😀".repeat(5_000) } }),
+    ).rejects.toThrow(/bytes, limit 20,000/);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

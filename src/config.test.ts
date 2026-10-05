@@ -26,7 +26,7 @@ describe("parsePluginConfiguration", () => {
       mode: "on-ask",
       reviewer: {
         backend: "agent",
-        agent: { maxInputChars: 200_000 },
+        agent: { maxInputBytes: 200_000 },
         timeoutMs: 30_000,
         recordUsage: true,
       },
@@ -50,7 +50,7 @@ describe("parsePluginConfiguration", () => {
         backend: "agent",
         agent: {
           model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
-          maxInputChars: 200_000,
+          maxInputBytes: 200_000,
         },
         timeoutMs: 12_000,
         recordUsage: true,
@@ -469,7 +469,7 @@ describe("parsePluginConfiguration", () => {
           apiKey: "or-key",
           endpoint: "https://openrouter.ai/api/v1/chat/completions",
           model: "openai/gpt-5.6-luna",
-          maxInputChars: 200_000,
+          maxInputBytes: 200_000,
         },
       });
     });
@@ -658,7 +658,7 @@ describe("parsePluginConfiguration", () => {
           options: { reviewer: { agent: {}, model: { providerID: "c", modelID: "d" } } },
           env: {},
         }).reviewer.agent,
-      ).toEqual({ model: { providerID: "c", modelID: "d" }, maxInputChars: 200_000 });
+      ).toEqual({ model: { providerID: "c", modelID: "d" }, maxInputBytes: 200_000 });
     });
 
     it.each(["agent", "decision"])(
@@ -714,7 +714,7 @@ describe("parsePluginConfiguration", () => {
         }).reviewer,
       ).toEqual({
         backend: "decision",
-        agent: { maxInputChars: 200_000 },
+        agent: { maxInputBytes: 200_000 },
         timeoutMs: 30_000,
         recordUsage: true,
         decision: {

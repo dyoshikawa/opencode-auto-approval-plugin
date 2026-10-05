@@ -157,18 +157,18 @@ same System One API:
 }
 ```
 
-| Option                                  | Default                   | Description                                                                                |
-| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------ |
-| `reviewer.backend`                      | `"agent"`                 | `"agent"`, `"chat"` or `"decision"`                                                        |
-| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                                             |
-| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access                      |
-| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback)                  |
-| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                                             |
-| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior                     |
-| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                            |
-| `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)                |
-| `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer       |
-| `reviewer.agent.maxInputChars`          | `200000`                  | The agent reviewer escalates a longer prompt unsent rather than let the session compact it |
+| Option                                  | Default                   | Description                                                                                                        |
+| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `reviewer.backend`                      | `"agent"`                 | `"agent"`, `"chat"` or `"decision"`                                                                                |
+| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                                                                     |
+| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access                                              |
+| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback)                                          |
+| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                                                                     |
+| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior                                             |
+| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                                                    |
+| `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)                                        |
+| `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer                               |
+| `reviewer.agent.maxInputBytes`          | `200000`                  | The agent reviewer escalates a prompt longer than this (UTF-8 bytes) unsent rather than let the session compact it |
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the
@@ -259,7 +259,7 @@ alone, and the plugin needs an API key of its own.
 | `reviewer.chat.model`         | — (required)                                                    | Model ID as the endpoint names it, such as `openai/gpt-5.6-luna` on OpenRouter |
 | `reviewer.chat.apiKey`        | `AUTO_APPROVAL_CHAT_API_KEY`                                    | Bearer token for the endpoint                                                  |
 | `reviewer.chat.baseURL`       | `AUTO_APPROVAL_CHAT_BASE_URL`, else `https://api.openai.com/v1` | Base URL up to `/chat/completions`; HTTPS (HTTP only for loopback)             |
-| `reviewer.chat.maxInputChars` | `200000`                                                        | A prompt longer than this is too large and escalates unsent                    |
+| `reviewer.chat.maxInputBytes` | `200000`                                                        | A prompt longer than this (UTF-8 bytes) is too large and escalates unsent      |
 
 - As with TypeSafe, the key and the base URL come from the same place: `reviewer.chat.apiKey`
   with `reviewer.chat.baseURL`, or `AUTO_APPROVAL_CHAT_API_KEY` with `AUTO_APPROVAL_CHAT_BASE_URL`,
@@ -269,20 +269,21 @@ alone, and the plugin needs an API key of its own.
   the whole response, errors report the HTTP status only, and an over-long prompt
   (`context_length_exceeded`, a context length, size or window message, or HTTP 413) counts as too
   large.
-- Keep `maxInputChars` within what the server reads whole: for a local server, no more characters
-  than its context has tokens (Ollama's `num_ctx`), since Japanese or dense content runs about one
-  token a character. Some servers cut an over-long prompt instead of refusing it, from the start or
-  the middle. Three guards catch that, each treating the operation as too large:
+- Keep `maxInputBytes` within what the server reads whole: for a local server, no more bytes than
+  its context has tokens (Ollama's `num_ctx`) — a byte-level tokenizer never makes more than one
+  token a byte, whatever characters the operation is padded with. Some servers cut an over-long
+  prompt instead of refusing it, from the start or the middle. Three guards catch that, each
+  treating the operation as too large:
   - every prompt (agent reviewer too) opens with a random review check that the answer must echo,
     so a model whose prompt lost its start cannot answer;
-  - a reported prompt-token count below a floor no tokenizer goes under (8 ASCII characters or 2
-    other characters a token) means part of the prompt was not read — zero or no count says
+  - a reported prompt-token count below a floor under the measured densities (10 ASCII characters,
+    2 CJK characters or 6 other characters a token) means part of the prompt was not read — zero or no count says
     nothing, and cached tokens count as read;
   - the task, the untrusted-data rule and the answer format are restated after the operation data.
 
-  A cut that keeps the start can still go unnoticed if it is under about a quarter of English
-  prose or half of code, JSON or Japanese; size `maxInputChars` to the server's context instead of
-  relying on the guards.
+  A cut that keeps the start can still go unnoticed if it is under about two fifths of English
+  prose, two thirds of code or JSON, or half of Japanese; size `maxInputBytes` to the server's
+  context instead of relying on the guards.
 
 - Set `reviewer.chat` — like `onOversize`, `baseURL` and `minAllowProbability` — only in
   configuration you trust. The same-source rule stops one source redirecting a key from another, but

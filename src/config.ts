@@ -53,8 +53,8 @@ export type ChatConfiguration = {
   /** Full URL of the Chat Completions endpoint. */
   endpoint: string;
   model: string;
-  /** A whole prompt (instructions and operation) longer than this is not sent. */
-  maxInputChars: number;
+  /** A whole prompt (instructions and operation) longer than this, in UTF-8 bytes, is not sent. */
+  maxInputBytes: number;
 };
 
 export type PluginConfiguration = {
@@ -64,8 +64,8 @@ export type PluginConfiguration = {
     agent: {
       /** The reviewer session's model; the main session's when unset. */
       model?: ModelReference;
-      /** Prompts longer than this escalate unsent. */
-      maxInputChars: number;
+      /** Prompts longer than this, in UTF-8 bytes, escalate unsent. */
+      maxInputBytes: number;
     };
     timeoutMs: number;
     /** The user's own review policy, added to every review as trusted guidance. */
@@ -109,7 +109,7 @@ const defaultMaxStateTokens: Record<DecisionProvider, number> = {
  * within what a hosted model reads whole, and leaves the agent reviewer room
  * to read files before its session would be compacted.
  */
-const defaultMaxLLMInputChars = 200_000;
+const defaultMaxLLMInputBytes = 200_000;
 
 const defaultChatBaseURL = "https://api.openai.com/v1";
 
@@ -128,7 +128,7 @@ const modelReferenceSchema = z.object({
 
 const agentOptionsSchema = z.object({
   model: z.optional(modelReferenceSchema),
-  maxInputChars: z.optional(z.int().check(z.gte(1_000), z.lte(4_000_000))),
+  maxInputBytes: z.optional(z.int().check(z.gte(1_000), z.lte(4_000_000))),
 });
 
 const decisionOptionsShape = {
@@ -143,7 +143,7 @@ const chatOptionsSchema = z.object({
   apiKey: z.optional(z.string()),
   baseURL: z.optional(z.string()),
   model: z.string().check(z.minLength(1)),
-  maxInputChars: z.optional(z.int().check(z.gte(1_000), z.lte(4_000_000))),
+  maxInputBytes: z.optional(z.int().check(z.gte(1_000), z.lte(4_000_000))),
 });
 
 const typeSafeOptionsSchema = z.object({
@@ -293,8 +293,8 @@ function agentConfiguration(
   reviewer: ReviewerOptions | undefined,
 ): PluginConfiguration["reviewer"]["agent"] {
   const model = reviewer?.agent?.model ?? reviewer?.model;
-  const maxInputChars = reviewer?.agent?.maxInputChars ?? defaultMaxLLMInputChars;
-  return model === undefined ? { maxInputChars } : { model, maxInputChars };
+  const maxInputBytes = reviewer?.agent?.maxInputBytes ?? defaultMaxLLMInputBytes;
+  return model === undefined ? { maxInputBytes } : { model, maxInputBytes };
 }
 
 /**
@@ -470,7 +470,7 @@ function chatConfiguration(input: { options: unknown; env: Environment }): ChatC
     apiKey: source.apiKey,
     endpoint: chatEndpoint(source.baseURL ?? defaultChatBaseURL),
     model: options.model,
-    maxInputChars: options.maxInputChars ?? defaultMaxLLMInputChars,
+    maxInputBytes: options.maxInputBytes ?? defaultMaxLLMInputBytes,
   };
 }
 

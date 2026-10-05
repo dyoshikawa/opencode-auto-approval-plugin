@@ -122,16 +122,29 @@ export function reviewCheck(): string {
  * likely cut by the server — so its answer cannot stand.
  */
 export function parseVerdict(input: string, expectedCheck: string): ReviewVerdict {
-  if (!input.includes("{")) {
+  // Reasoning is a draft, not the answer.
+  const reply = input.replace(/<think>[\s\S]*?<\/think>/g, "");
+  if (!reply.includes("{")) {
     throw new Error("Reviewer response did not contain JSON.");
   }
-  const parsed = lastVerdictObject(input);
+  const candidates = verdictObjects(reply);
+  // The answer is the object the reply ends with: a draft or a quotation
+  // before a broken final object must not stand in for it.
+  const parsed = candidates.find((candidate) => candidate.end === lastBrace(reply));
   if (parsed === undefined) {
     throw new Error("Reviewer response did not match the verdict schema.");
   }
-  // Models wrap the value in its label or punctuation now and then; the
-  // UUID itself is what cannot be guessed.
-  if (typeof parsed.check !== "string" || !parsed.check.includes(expectedCheck)) {
+  // Two verdicts carrying the check — a quoted allow after a deny — leave
+  // the answer ambiguous.
+  if (
+    candidates.some(
+      (candidate) =>
+        hasCheck(candidate.check, expectedCheck) && candidate.verdict !== parsed.verdict,
+    )
+  ) {
+    throw new Error("Reviewer response held conflicting verdicts.");
+  }
+  if (!hasCheck(parsed.check, expectedCheck)) {
     throw new OversizeError(
       "The reviewer's answer lacked the review check from the start of its prompt, so it likely did not read the whole operation.",
     );
@@ -139,16 +152,31 @@ export function parseVerdict(input: string, expectedCheck: string): ReviewVerdic
   return { verdict: parsed.verdict, reason: sanitizeReason(parsed.reason) };
 }
 
-/**
- * The last JSON object in a reply that has the verdict's shape. Replies may
- * wrap it in prose, a code fence or reasoning that has braces of its own, and
- * the answer comes last.
- */
-function lastVerdictObject(
-  input: string,
-): { verdict: ReviewVerdict["verdict"]; reason: string; check?: unknown } | undefined {
+/** Models wrap the value in its label or punctuation now and then; the UUID is what cannot be guessed. */
+function hasCheck(value: unknown, expected: string): boolean {
+  return typeof value === "string" && value.includes(expected);
+}
+
+/** The index of the reply's last `}`, ignoring a closing code fence or whitespace after it. */
+function lastBrace(reply: string): number {
+  return reply.replace(/[\s`]+$/, "").length - 1;
+}
+
+/** Every JSON object in a reply with the verdict's shape, and where it ends. */
+function verdictObjects(input: string): {
+  verdict: ReviewVerdict["verdict"];
+  reason: string;
+  check?: unknown;
+  end: number;
+}[] {
   const starts = [...input.matchAll(/\{/g)].map((match) => match.index).toReversed();
   const ends = [...input.matchAll(/\}/g)].map((match) => match.index).toReversed();
+  const found: {
+    verdict: ReviewVerdict["verdict"];
+    reason: string;
+    check?: unknown;
+    end: number;
+  }[] = [];
   for (const start of starts.slice(0, MAX_JSON_CANDIDATES)) {
     for (const end of ends.slice(0, MAX_JSON_CANDIDATES)) {
       if (end < start) break;
@@ -159,11 +187,12 @@ function lastVerdictObject(
         continue;
       }
       if (isRecord(value) && isVerdict(value.verdict) && typeof value.reason === "string") {
-        return { verdict: value.verdict, reason: value.reason, check: value.check };
+        found.push({ verdict: value.verdict, reason: value.reason, check: value.check, end });
       }
+      break;
     }
   }
-  return undefined;
+  return found;
 }
 
 /** Bounds the search in a reply full of braces. */
@@ -204,10 +233,12 @@ export function estimateTokens(text: string): number {
 /**
  * Some servers cut an over-long prompt instead of refusing it (Ollama past
  * `num_ctx`; llama.cpp with `--keep` drops the middle). A reported count below
- * a floor no tokenizer goes under — 8 ASCII characters or 2 other characters a
- * token, where prose measured 5.7 and code 2.5 to 3.4 — means part of the
- * prompt was not read: about a quarter of prose, half of code and JSON, or
- * half of Japanese. A count of zero or none says nothing.
+ * a floor under the measured densities — 10 ASCII characters a token where
+ * prose measured 5.7, code 2.5 to 3.4 and space-aligned text less, 2 CJK
+ * characters where Japanese measured about 1, 6 for other scripts (Cyrillic
+ * measured 3.7) — means part of the prompt was not read: about two fifths of
+ * prose, two thirds of code, half of Japanese. A count of zero or none says
+ * nothing.
  */
 export function assertReadWhole(input: {
   model: string;
@@ -224,10 +255,23 @@ export function assertReadWhole(input: {
 
 function minimumTokens(text: string): number {
   let ascii = 0;
+  let dense = 0;
   let other = 0;
   for (const character of text) {
-    if ((character.codePointAt(0) ?? 0) < 0x80) ascii += 1;
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x80) ascii += 1;
+    else if (isDenseScript(code)) dense += 1;
     else other += 1;
   }
-  return Math.floor(ascii / 8 + other / 2);
+  return Math.floor(ascii / 10 + dense / 2 + other / 6);
+}
+
+/** CJK, kana and Hangul: about one token a character on Jev and Clef. */
+function isDenseScript(code: number): boolean {
+  return (
+    (code >= 0x3000 && code <= 0x9fff) ||
+    (code >= 0xac00 && code <= 0xd7af) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    code >= 0x20000
+  );
 }

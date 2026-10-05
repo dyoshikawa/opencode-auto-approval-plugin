@@ -96,12 +96,13 @@ export class ChatReviewer implements Reviewer {
       instructions: this.#instructions,
       check,
     });
-    const { model, maxInputChars } = this.#configuration;
-    if (prompt.length > maxInputChars) {
+    const { model, maxInputBytes } = this.#configuration;
+    const bytes = Buffer.byteLength(prompt, "utf8");
+    if (bytes > maxInputBytes) {
       input.tokens.input = 0;
       input.tokens.output = 0;
       throw new OversizeError(
-        `Operation too large for ${model} (${prompt.length.toLocaleString("en-US")} characters, limit ${maxInputChars.toLocaleString("en-US")}).`,
+        `Operation too large for ${model} (${bytes.toLocaleString("en-US")} bytes, limit ${maxInputBytes.toLocaleString("en-US")}).`,
       );
     }
 
