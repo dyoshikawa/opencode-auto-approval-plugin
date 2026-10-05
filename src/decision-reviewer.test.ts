@@ -543,7 +543,9 @@ describe("DecisionReviewer with an operation too large for the model", () => {
 
     await expect(
       reviewer.review({ ...request, resource: { content: "日本語".repeat(6_000) } }),
-    ).rejects.toThrow(/counted 1,000 tokens for [\d,]+ characters, so it likely cut the input/);
+    ).rejects.toThrow(
+      /counted 1,000 tokens for a prompt estimated at [\d,]+, so it likely cut the input/,
+    );
     expect(records).toMatchObject([{ verdict: "oversize", inputTokens: 1_000 }]);
   });
 });

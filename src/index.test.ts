@@ -79,13 +79,22 @@ describe("plugin entrypoint", () => {
   it("hands an operation too large for the decision model to the chat fallback", async () => {
     const hooks: Record<string, (event: Record<string, unknown>) => Promise<void>> = {};
     const registration = { dispose: async () => undefined };
-    const fetch = vi.fn(async (url: string) =>
-      url.endsWith("/chat/completions")
-        ? Response.json({
-            choices: [{ message: { content: '{"verdict":"allow","reason":"read it whole"}' } }],
-          })
-        : Response.json({ detail: { error_type: "max_tokens_exceeded" } }, { status: 400 }),
-    );
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (!url.endsWith("/chat/completions")) {
+        return Response.json({ detail: { error_type: "max_tokens_exceeded" } }, { status: 400 });
+      }
+      const prompt: string = JSON.parse(String(init?.body)).messages[1].content;
+      const check = /Review check: ([\da-f-]+)\./.exec(prompt)?.[1];
+      return Response.json({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ verdict: "allow", reason: "read it whole", check }),
+            },
+          },
+        ],
+      });
+    });
     vi.stubGlobal("fetch", fetch);
 
     try {

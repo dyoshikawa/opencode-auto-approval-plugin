@@ -105,10 +105,11 @@ const defaultMaxStateTokens: Record<DecisionProvider, number> = {
 };
 
 /**
- * LLM reviewers have long contexts; this keeps one review to a bounded cost
- * and below what a typical model reads whole.
+ * LLM reviewers have long contexts; this keeps one review to a bounded cost,
+ * within what a hosted model reads whole, and leaves the agent reviewer room
+ * to read files before its session would be compacted.
  */
-const defaultMaxLLMInputChars = 400_000;
+const defaultMaxLLMInputChars = 200_000;
 
 const defaultChatBaseURL = "https://api.openai.com/v1";
 

@@ -6,6 +6,7 @@ import {
   type ReviewRequest,
   type ReviewSessionClient,
   type ReviewVerdict,
+  reviewCheck,
   reviewerPrompt,
 } from "./reviewer.js";
 
@@ -34,9 +35,11 @@ export class AgentReviewer implements Reviewer {
   }
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
+    const check = reviewCheck();
     const text = reviewerPrompt({
       request: input,
       instructions: this.#configuration.reviewer.instructions,
+      check,
     });
     const { maxInputChars } = this.#configuration.reviewer.agent;
     if (text.length > maxInputChars) {
@@ -56,7 +59,7 @@ export class AgentReviewer implements Reviewer {
         operation: this.#client.prompt({ sessionID, text }),
         timeoutMs: this.#configuration.reviewer.timeoutMs,
       });
-      return parseVerdict(response);
+      return parseVerdict(response, check);
     } catch (error) {
       void this.#client.abort({ sessionID }).catch(() => undefined);
       throw error;

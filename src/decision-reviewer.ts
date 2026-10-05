@@ -191,7 +191,7 @@ export class DecisionReviewer implements Reviewer {
       input.tokens.input = usage.data.usage?.input_tokens ?? null;
       input.tokens.output = usage.data.usage?.output_tokens ?? null;
     }
-    assertReadWhole({ model, promptChars: serialized.length, reportedTokens: input.tokens.input });
+    assertReadWhole({ model, prompt: serialized, reportedTokens: input.tokens.input });
     return this.#verdict({ answer: body });
   }
 

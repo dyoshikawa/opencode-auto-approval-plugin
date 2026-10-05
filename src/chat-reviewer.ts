@@ -9,6 +9,7 @@ import {
   type Reviewer,
   type ReviewRequest,
   type ReviewVerdict,
+  reviewCheck,
   reviewerPrompt,
 } from "./reviewer.js";
 import type { UsageRecorder } from "./usage.js";
@@ -28,6 +29,9 @@ const completionSchema = z.object({
   usage: z.optional(
     z.object({
       prompt_tokens: z.optional(z.nullable(z.int().check(z.gte(0)))),
+      prompt_tokens_details: z.optional(
+        z.nullable(z.object({ cached_tokens: z.optional(z.int().check(z.gte(0))) })),
+      ),
       completion_tokens: z.optional(z.nullable(z.int().check(z.gte(0)))),
     }),
   ),
@@ -84,7 +88,12 @@ export class ChatReviewer implements Reviewer {
     request: ReviewRequest;
     tokens: { input: number | null; output: number | null };
   }): Promise<ReviewVerdict> {
-    const prompt = reviewerPrompt({ request: input.request, instructions: this.#instructions });
+    const check = reviewCheck();
+    const prompt = reviewerPrompt({
+      request: input.request,
+      instructions: this.#instructions,
+      check,
+    });
     const { model, maxInputChars } = this.#configuration;
     if (prompt.length > maxInputChars) {
       input.tokens.input = 0;
@@ -110,11 +119,13 @@ export class ChatReviewer implements Reviewer {
     });
     if (!result.ok) {
       // OpenAI names an over-long prompt `context_length_exceeded`; compatible
-      // servers word it as the maximum context length, or answer 413.
+      // servers word it as a context length, size or window, or answer 413.
       if (
         result.status === 413 ||
         (result.status === 400 &&
-          /context_length_exceeded|maximum context length/i.test(result.text))
+          /context_length_exceeded|maximum context length|exceed_context_size|context size|context window/i.test(
+            result.text,
+          ))
       ) {
         throw new OversizeError(`Operation too large for ${model} (refused by the API).`);
       }
@@ -126,17 +137,19 @@ export class ChatReviewer implements Reviewer {
       throw new Error("Chat model response did not match the completion schema.");
     }
     input.tokens.input = completion.data.usage?.prompt_tokens ?? null;
+    // Tokens served from a prompt cache were read too.
+    const cached = completion.data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
     input.tokens.output = completion.data.usage?.completion_tokens ?? null;
     assertReadWhole({
       model,
-      promptChars: prompt.length + systemPrompt.length,
-      reportedTokens: input.tokens.input,
+      prompt: `${systemPrompt}\n${prompt}`,
+      reportedTokens: input.tokens.input === null ? null : input.tokens.input + cached,
     });
     const content = completion.data.choices[0]?.message.content;
     if (!content) {
       throw new Error("Chat model response had no content.");
     }
-    return parseVerdict(content);
+    return parseVerdict(content, check);
   }
 
   #record(input: {

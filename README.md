@@ -126,7 +126,8 @@ remains entirely in OpenCode.
 Set `reviewer.backend` to `"decision"` to have a decision model judge each operation instead of an
 OpenCode session. The plugin sends one request with the operation (`source`, `action`,
 `resource`, and the user's latest prompt) and a single `allow` / `deny` / `escalate` choice. No
-reviewer agent or session is created and the workspace is not inspected. Two providers speak the
+reviewer agent or session is created (unless `onOversize` is `"agent"`) and the workspace is not
+inspected. Two providers speak the
 same System One API:
 
 | Provider     | Models                                                                                                  | Credentials (option / environment)                                       | Default model |
@@ -167,7 +168,7 @@ same System One API:
 | `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                            |
 | `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)                |
 | `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer       |
-| `reviewer.agent.maxInputChars`          | `400000`                  | The agent reviewer escalates a longer prompt unsent rather than let the session compact it |
+| `reviewer.agent.maxInputChars`          | `200000`                  | The agent reviewer escalates a longer prompt unsent rather than let the session compact it |
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the
@@ -207,8 +208,8 @@ same System One API:
 - Redirects are refused so the API key is never forwarded to another host, and the timeout covers
   the whole request including the response body. HTTP errors (`402` out of credit, `429` rate
   limited, `5xx` outage) are reported by status only and handled like any other reviewer failure.
-- `reviewer.agent` has no effect with the `decision` backend, and `reviewer.decision`
-  none with the `agent` backend. Aliases such as `jev-latest` follow new model releases, which may shift
+- `reviewer.agent` has no effect with the `decision` backend unless `onOversize` is `"agent"`, and
+  `reviewer.decision` none with the `agent` backend. Aliases such as `jev-latest` follow new model releases, which may shift
   verdicts; pin a version for stable behavior.
 
 ### Operations too large for the decision model
@@ -258,7 +259,7 @@ alone, and the plugin needs an API key of its own.
 | `reviewer.chat.model`         | — (required)                                                    | Model ID as the endpoint names it, such as `openai/gpt-5.6-luna` on OpenRouter |
 | `reviewer.chat.apiKey`        | `AUTO_APPROVAL_CHAT_API_KEY`                                    | Bearer token for the endpoint                                                  |
 | `reviewer.chat.baseURL`       | `AUTO_APPROVAL_CHAT_BASE_URL`, else `https://api.openai.com/v1` | Base URL up to `/chat/completions`; HTTPS (HTTP only for loopback)             |
-| `reviewer.chat.maxInputChars` | `400000`                                                        | A prompt longer than this is too large and escalates unsent                    |
+| `reviewer.chat.maxInputChars` | `200000`                                                        | A prompt longer than this is too large and escalates unsent                    |
 
 - As with TypeSafe, the key and the base URL come from the same place: `reviewer.chat.apiKey`
   with `reviewer.chat.baseURL`, or `AUTO_APPROVAL_CHAT_API_KEY` with `AUTO_APPROVAL_CHAT_BASE_URL`,
@@ -266,11 +267,18 @@ alone, and the plugin needs an API key of its own.
   such as `OPENROUTER_API_KEY` can be used without writing the key down.
 - The same safeguards apply as for the decision backend: redirects are refused, the timeout covers
   the whole response, errors report the HTTP status only, and an over-long prompt
-  (`context_length_exceeded`, "maximum context length", or HTTP 413) counts as too large.
-- Keep `maxInputChars` within what the server reads whole. Some servers cut an over-long prompt
-  instead of refusing it — Ollama past its `num_ctx`, for one — so the plugin also treats a reply
-  whose reported prompt tokens are implausibly few for the characters sent (more than 12 characters
-  a token) as too large, and restates the task after the operation data.
+  (`context_length_exceeded`, a context length, size or window message, or HTTP 413) counts as too
+  large.
+- Keep `maxInputChars` within what the server reads whole — for a local server, about twice its
+  context in tokens (Ollama's `num_ctx`). Some servers cut an over-long prompt instead of refusing
+  it, from the start or the middle. Three guards catch that, each escalating as too large:
+  - every prompt (agent reviewer too) opens with a random review check that the answer must echo,
+    so a model that never saw the start cannot answer;
+  - a reported prompt-token count below a quarter of the plugin's estimate (zero or none reported
+    says nothing; cached tokens count as read) means most of the prompt was cut;
+  - the task and the answer format are restated after the operation data.
+    A server that silently drops a small slice from the middle is not detected; size `maxInputChars`
+    to its context instead.
 - Set `reviewer.chat` — like `onOversize`, `baseURL` and `minAllowProbability` — only in
   configuration you trust. The same-source rule stops one source redirecting a key from another, but
   OpenCode substitutes `{env:NAME}` before the plugin sees the options, so a repository's
