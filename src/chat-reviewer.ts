@@ -26,15 +26,17 @@ const systemPrompt =
 
 const completionSchema = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.nullable(z.string()) }) })),
-  usage: z.optional(
-    z.object({
-      prompt_tokens: z.optional(z.nullable(z.int().check(z.gte(0)))),
-      prompt_tokens_details: z.optional(
-        z.nullable(z.object({ cached_tokens: z.optional(z.int().check(z.gte(0))) })),
-      ),
-      completion_tokens: z.optional(z.nullable(z.int().check(z.gte(0)))),
-    }),
-  ),
+});
+
+/** Read on its own and leniently: token counts must never decide a review. */
+const usageSchema = z.object({
+  usage: z.object({
+    prompt_tokens: z.optional(z.nullable(z.number())),
+    completion_tokens: z.optional(z.nullable(z.number())),
+    prompt_tokens_details: z.optional(
+      z.nullable(z.object({ cached_tokens: z.optional(z.nullable(z.number())) })),
+    ),
+  }),
 });
 
 export class ChatReviewer implements Reviewer {
@@ -136,14 +138,17 @@ export class ChatReviewer implements Reviewer {
     if (!completion.success) {
       throw new Error("Chat model response did not match the completion schema.");
     }
-    input.tokens.input = completion.data.usage?.prompt_tokens ?? null;
-    // Tokens served from a prompt cache were read too.
-    const cached = completion.data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
-    input.tokens.output = completion.data.usage?.completion_tokens ?? null;
+    const usage = z.safeParse(usageSchema, result.body);
+    const counts = usage.success ? usage.data.usage : undefined;
+    input.tokens.input = tokenCount(counts?.prompt_tokens);
+    input.tokens.output = tokenCount(counts?.completion_tokens);
+    // `prompt_tokens` includes cached tokens on OpenAI; a server that left
+    // them out still read them.
+    const cached = tokenCount(counts?.prompt_tokens_details?.cached_tokens) ?? 0;
     assertReadWhole({
       model,
       prompt: `${systemPrompt}\n${prompt}`,
-      reportedTokens: input.tokens.input === null ? null : input.tokens.input + cached,
+      reportedTokens: input.tokens.input === null ? null : Math.max(input.tokens.input, cached),
     });
     const content = completion.data.choices[0]?.message.content;
     if (!content) {
@@ -176,4 +181,8 @@ export class ChatReviewer implements Reviewer {
       // The usage log must never decide a review.
     }
   }
+}
+
+function tokenCount(input: number | null | undefined): number | null {
+  return typeof input === "number" && Number.isInteger(input) && input >= 0 ? input : null;
 }

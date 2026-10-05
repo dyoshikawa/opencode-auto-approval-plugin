@@ -269,16 +269,21 @@ alone, and the plugin needs an API key of its own.
   the whole response, errors report the HTTP status only, and an over-long prompt
   (`context_length_exceeded`, a context length, size or window message, or HTTP 413) counts as too
   large.
-- Keep `maxInputChars` within what the server reads whole — for a local server, about twice its
-  context in tokens (Ollama's `num_ctx`). Some servers cut an over-long prompt instead of refusing
-  it, from the start or the middle. Three guards catch that, each escalating as too large:
+- Keep `maxInputChars` within what the server reads whole: for a local server, no more characters
+  than its context has tokens (Ollama's `num_ctx`), since Japanese or dense content runs about one
+  token a character. Some servers cut an over-long prompt instead of refusing it, from the start or
+  the middle. Three guards catch that, each treating the operation as too large:
   - every prompt (agent reviewer too) opens with a random review check that the answer must echo,
-    so a model that never saw the start cannot answer;
-  - a reported prompt-token count below a quarter of the plugin's estimate (zero or none reported
-    says nothing; cached tokens count as read) means most of the prompt was cut;
-  - the task and the answer format are restated after the operation data.
-    A server that silently drops a small slice from the middle is not detected; size `maxInputChars`
-    to its context instead.
+    so a model whose prompt lost its start cannot answer;
+  - a reported prompt-token count below a floor no tokenizer goes under (8 ASCII characters or 2
+    other characters a token) means part of the prompt was not read — zero or no count says
+    nothing, and cached tokens count as read;
+  - the task, the untrusted-data rule and the answer format are restated after the operation data.
+
+  A cut that keeps the start can still go unnoticed if it is under about a quarter of English
+  prose or half of code, JSON or Japanese; size `maxInputChars` to the server's context instead of
+  relying on the guards.
+
 - Set `reviewer.chat` — like `onOversize`, `baseURL` and `minAllowProbability` — only in
   configuration you trust. The same-source rule stops one source redirecting a key from another, but
   OpenCode substitutes `{env:NAME}` before the plugin sees the options, so a repository's

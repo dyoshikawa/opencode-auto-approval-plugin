@@ -87,7 +87,7 @@ export function reviewerPrompt(input: {
   return [
     // First, so a server that drops the start of an over-long prompt drops it
     // too, and the reply cannot echo it.
-    `Review check: ${input.check}. Copy it into the "check" field of your answer.`,
+    `Review check: "${input.check}". Copy it into the "check" field of your answer.`,
     "Review this requested OpenCode operation. Decide whether it is safe and within the user's intent.",
     // The user's policy comes from their own plugin configuration, so it sits
     // outside the untrusted block and before the output format.
@@ -118,26 +118,56 @@ export function reviewCheck(): string {
 
 /**
  * Reads the JSON verdict out of an LLM reply. A reply without the prompt's
- * check came from a model that did not read the start of the prompt — cut by
- * the server or compacted by the session — so its answer cannot stand.
+ * check came from a model that did not read the start of the prompt — most
+ * likely cut by the server — so its answer cannot stand.
  */
 export function parseVerdict(input: string, expectedCheck: string): ReviewVerdict {
-  const match = input.match(/\{[\s\S]*\}/);
-  if (!match) {
+  if (!input.includes("{")) {
     throw new Error("Reviewer response did not contain JSON.");
   }
-
-  const parsed: unknown = JSON.parse(match[0]);
-  if (!isRecord(parsed) || !isVerdict(parsed.verdict) || typeof parsed.reason !== "string") {
+  const parsed = lastVerdictObject(input);
+  if (parsed === undefined) {
     throw new Error("Reviewer response did not match the verdict schema.");
   }
-  if (parsed.check !== expectedCheck) {
+  // Models wrap the value in its label or punctuation now and then; the
+  // UUID itself is what cannot be guessed.
+  if (typeof parsed.check !== "string" || !parsed.check.includes(expectedCheck)) {
     throw new OversizeError(
       "The reviewer's answer lacked the review check from the start of its prompt, so it likely did not read the whole operation.",
     );
   }
   return { verdict: parsed.verdict, reason: sanitizeReason(parsed.reason) };
 }
+
+/**
+ * The last JSON object in a reply that has the verdict's shape. Replies may
+ * wrap it in prose, a code fence or reasoning that has braces of its own, and
+ * the answer comes last.
+ */
+function lastVerdictObject(
+  input: string,
+): { verdict: ReviewVerdict["verdict"]; reason: string; check?: unknown } | undefined {
+  const starts = [...input.matchAll(/\{/g)].map((match) => match.index).toReversed();
+  const ends = [...input.matchAll(/\}/g)].map((match) => match.index).toReversed();
+  for (const start of starts.slice(0, MAX_JSON_CANDIDATES)) {
+    for (const end of ends.slice(0, MAX_JSON_CANDIDATES)) {
+      if (end < start) break;
+      let value: unknown;
+      try {
+        value = JSON.parse(input.slice(start, end + 1));
+      } catch {
+        continue;
+      }
+      if (isRecord(value) && isVerdict(value.verdict) && typeof value.reason === "string") {
+        return { verdict: value.verdict, reason: value.reason, check: value.check };
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Bounds the search in a reply full of braces. */
+const MAX_JSON_CANDIDATES = 40;
 
 function isVerdict(input: unknown): input is ReviewVerdict["verdict"] {
   return input === "allow" || input === "deny" || input === "escalate";
@@ -173,11 +203,11 @@ export function estimateTokens(text: string): number {
 
 /**
  * Some servers cut an over-long prompt instead of refusing it (Ollama past
- * `num_ctx`; llama.cpp drops the middle). A reported count below a quarter of
- * the conservative estimate means the model read a fraction of the prompt:
- * the estimate is at most about 2.3 times the real count (English prose), so
- * this flags a cut of roughly half the prompt or more, and of three quarters
- * for code or Japanese. A count of zero or none says nothing.
+ * `num_ctx`; llama.cpp with `--keep` drops the middle). A reported count below
+ * a floor no tokenizer goes under — 8 ASCII characters or 2 other characters a
+ * token, where prose measured 5.7 and code 2.5 to 3.4 — means part of the
+ * prompt was not read: about a quarter of prose, half of code and JSON, or
+ * half of Japanese. A count of zero or none says nothing.
  */
 export function assertReadWhole(input: {
   model: string;
@@ -185,9 +215,19 @@ export function assertReadWhole(input: {
   reportedTokens: number | null;
 }): void {
   if (input.reportedTokens === null || input.reportedTokens <= 0) return;
-  const estimate = estimateTokens(input.prompt);
-  if (input.reportedTokens * 4 >= estimate) return;
+  const floor = minimumTokens(input.prompt);
+  if (input.reportedTokens >= floor) return;
   throw new OversizeError(
-    `Operation too large for ${input.model}: the server counted ${input.reportedTokens.toLocaleString("en-US")} tokens for a prompt estimated at ${estimate.toLocaleString("en-US")}, so it likely cut the input.`,
+    `Operation too large for ${input.model}: the server counted ${input.reportedTokens.toLocaleString("en-US")} tokens for a prompt of at least ${floor.toLocaleString("en-US")}, so it likely cut the input.`,
   );
+}
+
+function minimumTokens(text: string): number {
+  let ascii = 0;
+  let other = 0;
+  for (const character of text) {
+    if ((character.codePointAt(0) ?? 0) < 0x80) ascii += 1;
+    else other += 1;
+  }
+  return Math.floor(ascii / 8 + other / 2);
 }

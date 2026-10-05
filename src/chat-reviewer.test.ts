@@ -23,7 +23,7 @@ function completion(input: { content: string | null; usage?: Record<string, numb
 
 /** A model that read the whole prompt echoes its review check. */
 function echoCheck(reply: string, prompt: string): string {
-  const check = /Review check: ([\da-f-]+)\./.exec(prompt)?.[1];
+  const check = /Review check: "([\da-f-]+)"/.exec(prompt)?.[1];
   return check !== undefined && reply.includes('"verdict"') && !reply.includes('"check"')
     ? reply.replace(/\}\s*$/, `,"check":"${check}"}`)
     : reply;
@@ -204,10 +204,12 @@ describe("ChatReviewer", () => {
     expect(records).toMatchObject([{ verdict: "oversize" }]);
   });
 
-  it("counts cached prompt tokens as read and ignores a zero count", async () => {
+  it("never lets odd token counts decide a review", async () => {
     for (const usage of [
       { prompt_tokens: 0, completion_tokens: 5 },
       { prompt_tokens: 10, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 900 } },
+      { prompt_tokens: 900, completion_tokens: 5, prompt_tokens_details: { cached_tokens: null } },
+      { prompt_tokens: "many", completion_tokens: 5 },
     ]) {
       const { reviewer } = chatReviewer({
         response: async () =>

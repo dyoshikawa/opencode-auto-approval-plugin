@@ -9,7 +9,7 @@ type ReviewSessionOptions = Parameters<ReviewSessionClient["create"]>[0];
 
 /** A model that read the whole prompt echoes its review check. */
 function echoCheck(reply: string, prompt: string): string {
-  const check = /Review check: ([\da-f-]+)\./.exec(prompt)?.[1];
+  const check = /Review check: "([\da-f-]+)"/.exec(prompt)?.[1];
   return check !== undefined && reply.includes('"verdict"') && !reply.includes('"check"')
     ? reply.replace(/\}\s*$/, `,"check":"${check}"}`)
     : reply;

@@ -84,7 +84,7 @@ describe("plugin entrypoint", () => {
         return Response.json({ detail: { error_type: "max_tokens_exceeded" } }, { status: 400 });
       }
       const prompt: string = JSON.parse(String(init?.body)).messages[1].content;
-      const check = /Review check: ([\da-f-]+)\./.exec(prompt)?.[1];
+      const check = /Review check: "([\da-f-]+)"/.exec(prompt)?.[1];
       return Response.json({
         choices: [
           {
