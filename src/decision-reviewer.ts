@@ -1,8 +1,8 @@
 import * as z from "zod/mini";
 
-import type { DecisionModelConfiguration, PluginConfiguration } from "./config.js";
-import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
-import { sanitizeReason, userInstructionsPreamble } from "./reviewer.js";
+import type { Reviewer, ReviewRequest, ReviewVerdict } from "./agent-reviewer.js";
+import { sanitizeReason, userInstructionsPreamble } from "./agent-reviewer.js";
+import type { DecisionConfiguration, PluginConfiguration } from "./config.js";
 import { costUSD, type UsageRecorder } from "./usage.js";
 
 /**
@@ -76,8 +76,8 @@ const usageSchema = z.object({
 /** Workers AI wraps every answer in its API envelope. */
 const cloudflareEnvelopeSchema = z.object({ result: z.unknown() });
 
-export class DecisionModelReviewer implements Reviewer {
-  readonly #configuration: DecisionModelConfiguration;
+export class DecisionReviewer implements Reviewer {
+  readonly #configuration: DecisionConfiguration;
   readonly #timeoutMs: number;
   readonly #instructions: string | undefined;
   readonly #fetch: Fetch;
@@ -92,11 +92,11 @@ export class DecisionModelReviewer implements Reviewer {
     /** The project the reviews belong to, as recorded in the usage log. */
     project?: string;
   }) {
-    const decisionModel = input.configuration.reviewer.decisionModel;
-    if (decisionModel === undefined) {
-      throw new Error("The decision-model reviewer backend is not configured.");
+    const decision = input.configuration.reviewer.decision;
+    if (decision === undefined) {
+      throw new Error("The decision reviewer backend is not configured.");
     }
-    this.#configuration = decisionModel;
+    this.#configuration = decision;
     this.#timeoutMs = input.configuration.reviewer.timeoutMs;
     this.#instructions = input.configuration.reviewer.instructions;
     this.#fetch = input.fetch ?? globalThis.fetch;

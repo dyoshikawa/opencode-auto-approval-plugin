@@ -1,5 +1,10 @@
+import type {
+  Reviewer,
+  ReviewRequest,
+  ReviewSessionClient,
+  ReviewVerdict,
+} from "./agent-reviewer.js";
 import type { PluginConfiguration } from "./config.js";
-import type { Reviewer, ReviewRequest, ReviewSessionClient, ReviewVerdict } from "./reviewer.js";
 
 export type PluginDependencies = {
   createReviewer(input: {

@@ -67,7 +67,7 @@ export type Reviewer = {
   isReviewerSession(input: { sessionID: string }): boolean;
 };
 
-export class OpenCodeReviewer implements Reviewer {
+export class AgentReviewer implements Reviewer {
   readonly #client: ReviewSessionClient;
   readonly #configuration: PluginConfiguration;
   readonly #reviewerSessionIDs = new Set<string>();
@@ -83,7 +83,7 @@ export class OpenCodeReviewer implements Reviewer {
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
     const { sessionID } = await this.#client.create({
-      model: this.#configuration.reviewer.model ?? input.model,
+      model: this.#configuration.reviewer.agent.model ?? input.model,
     });
     this.#reviewerSessionIDs.add(sessionID);
 

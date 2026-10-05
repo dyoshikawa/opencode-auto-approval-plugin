@@ -1,14 +1,14 @@
 import type { Plugin } from "@opencode-ai/plugin";
 
-import type { ModelReference } from "./config.js";
-import { parsePluginConfiguration } from "./config.js";
-import type { ReviewSessionClient } from "./reviewer.js";
+import type { ReviewSessionClient } from "./agent-reviewer.js";
 import {
   reviewerAgentDescription,
   reviewerAgentName,
   reviewerAgentPrompt,
   reviewerAllowedTools,
-} from "./reviewer.js";
+} from "./agent-reviewer.js";
+import type { ModelReference } from "./config.js";
+import { parsePluginConfiguration } from "./config.js";
 import type { PluginDependencies } from "./shared.js";
 import { isRecord, reviewForApproval, reviewToolCallOrThrow, textFromParts } from "./shared.js";
 
@@ -122,8 +122,8 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
 
     return {
       config: async (config) => {
-        // The decision-model backend needs no reviewer agent.
-        if (configuration.reviewer.backend !== "opencode") return;
+        // The decision backend needs no reviewer agent.
+        if (configuration.reviewer.backend !== "agent") return;
         config.agent ??= {};
         config.agent[reviewerAgentName] = reviewerAgentConfig();
       },

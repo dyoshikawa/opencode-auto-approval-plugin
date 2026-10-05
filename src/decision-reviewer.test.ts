@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { type ReviewRequest, userInstructionsPreamble } from "./agent-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
-import { DecisionModelReviewer } from "./decision-model-reviewer.js";
-import { type ReviewRequest, userInstructionsPreamble } from "./reviewer.js";
+import { DecisionReviewer } from "./decision-reviewer.js";
 import type { UsageRecord } from "./usage.js";
 
 const request: ReviewRequest = {
@@ -19,10 +19,10 @@ function configuration(
   return parsePluginConfiguration({
     options: {
       reviewer: {
-        backend: "decision-model",
+        backend: "decision",
         timeoutMs: input.timeoutMs ?? 30_000,
         instructions: input.instructions,
-        decisionModel: { provider: "typesafe", minAllowProbability: input.minAllowProbability },
+        decision: { provider: "typesafe", minAllowProbability: input.minAllowProbability },
       },
     },
     env: { TYPESAFE_API_KEY: "test-key" },
@@ -51,11 +51,11 @@ function reviewerWith(input: {
   instructions?: string[];
 }) {
   const fetch = vi.fn<typeof globalThis.fetch>(input.response);
-  const reviewer = new DecisionModelReviewer({ configuration: configuration(input), fetch });
+  const reviewer = new DecisionReviewer({ configuration: configuration(input), fetch });
   return { reviewer, fetch };
 }
 
-describe("DecisionModelReviewer", () => {
+describe("DecisionReviewer", () => {
   it("adds configured instructions to the question, not to the state", async () => {
     const { reviewer, fetch } = reviewerWith({
       response: async () => answer({ choice: "allow" }),
@@ -325,17 +325,17 @@ function envelope(input: { choice: string; probabilities: Record<string, number>
   });
 }
 
-describe("DecisionModelReviewer with Cloudflare Workers AI", () => {
+describe("DecisionReviewer with Cloudflare Workers AI", () => {
   const accountId = "0123456789abcdef0123456789abcdef";
 
   function cloudflareReviewer(input: { response: () => Promise<Response>; model?: string }) {
     const fetch = vi.fn<typeof globalThis.fetch>(input.response);
-    const reviewer = new DecisionModelReviewer({
+    const reviewer = new DecisionReviewer({
       configuration: parsePluginConfiguration({
         options: {
           reviewer: {
-            backend: "decision-model",
-            decisionModel: { provider: "cloudflare", model: input.model },
+            backend: "decision",
+            decision: { provider: "cloudflare", model: input.model },
           },
         },
         env: { CLOUDFLARE_API_TOKEN: "cf-token", CLOUDFLARE_ACCOUNT_ID: accountId },
@@ -409,10 +409,10 @@ describe("DecisionModelReviewer with Cloudflare Workers AI", () => {
   });
 });
 
-describe("DecisionModelReviewer usage records", () => {
+describe("DecisionReviewer usage records", () => {
   function recordingReviewer(input: { response: () => Promise<Response> }) {
     const records: UsageRecord[] = [];
-    const reviewer = new DecisionModelReviewer({
+    const reviewer = new DecisionReviewer({
       configuration: configuration(),
       fetch: vi.fn<typeof globalThis.fetch>(input.response),
       recordUsage: (record) => records.push(record),
@@ -455,7 +455,7 @@ describe("DecisionModelReviewer usage records", () => {
   });
 
   it("keeps the review when recording throws", async () => {
-    const reviewer = new DecisionModelReviewer({
+    const reviewer = new DecisionReviewer({
       configuration: configuration(),
       fetch: vi.fn<typeof globalThis.fetch>(async () => answer({ choice: "deny" })),
       recordUsage: () => {
@@ -468,10 +468,10 @@ describe("DecisionModelReviewer usage records", () => {
 
   it("reads the tokens from inside the Workers AI envelope", async () => {
     const records: UsageRecord[] = [];
-    const reviewer = new DecisionModelReviewer({
+    const reviewer = new DecisionReviewer({
       configuration: parsePluginConfiguration({
         options: {
-          reviewer: { backend: "decision-model", decisionModel: { provider: "cloudflare" } },
+          reviewer: { backend: "decision", decision: { provider: "cloudflare" } },
         },
         env: {
           CLOUDFLARE_API_TOKEN: "cf-token",
