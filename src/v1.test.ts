@@ -27,6 +27,22 @@ function createPlugin(input: { verdict: ReviewerVerdict }) {
 }
 
 describe("V1 plugin (opencode 1.x)", () => {
+  it("registers the reviewer agent for the decision backend's agent fallback", async () => {
+    const { context } = createContext();
+    const { plugin } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, {
+      reviewer: {
+        backend: "decision",
+        decision: { provider: "typesafe", apiKey: "test-key", onOversize: "agent" },
+      },
+    });
+    const config: { agent?: Record<string, unknown> } = {};
+
+    await hooks.config?.(config as never);
+
+    expect(config.agent).toHaveProperty("auto-approval-reviewer");
+  });
+
   it("registers no reviewer agent for the decision backend", async () => {
     const { context } = createContext();
     const { plugin } = createPlugin({ verdict: "allow" });

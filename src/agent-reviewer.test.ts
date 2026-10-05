@@ -33,7 +33,7 @@ function clientWithResponse(input: { response: string }): ReviewSessionClient & 
   };
 }
 
-describe("Reviewer", () => {
+describe("AgentReviewer", () => {
   it("inherits the main session model when no reviewer model is configured", async () => {
     const client = clientWithResponse({ response: '{"verdict":"allow","reason":"read-only"}' });
     const reviewer = new AgentReviewer({

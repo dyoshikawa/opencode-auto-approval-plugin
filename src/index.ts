@@ -1,25 +1,40 @@
 import { AgentReviewer } from "./agent-reviewer.js";
+import { ChatReviewer } from "./chat-reviewer.js";
 import { DecisionReviewer } from "./decision-reviewer.js";
+import { OversizeFallbackReviewer } from "./fallback-reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { fileUsageRecorder, projectID, usageLogPath } from "./usage.js";
 import { createV1Plugin } from "./v1.js";
 import { createV2Plugin } from "./v2.js";
 
 const defaultDependencies: PluginDependencies = {
-  createReviewer: (input) =>
-    input.configuration.reviewer.backend === "decision"
-      ? new DecisionReviewer({
-          configuration: input.configuration,
-          // Reviews in an opencode session already count in `opencode stats`;
-          // decision model calls are logged for this package's `stats`.
-          ...(input.configuration.reviewer.recordUsage
-            ? {
-                recordUsage: fileUsageRecorder({ path: usageLogPath() }),
-                project: projectID({ directory: input.directory }),
-              }
-            : {}),
-        })
-      : new AgentReviewer(input),
+  createReviewer: (input) => {
+    const { reviewer } = input.configuration;
+    // Reviews in an OpenCode session already count in `opencode stats`; the
+    // HTTP backends are logged for this package's `stats`.
+    const usage = reviewer.recordUsage
+      ? {
+          recordUsage: fileUsageRecorder({ path: usageLogPath() }),
+          project: projectID({ directory: input.directory }),
+        }
+      : {};
+    const agent = () => new AgentReviewer(input);
+    const chat = () => new ChatReviewer({ configuration: input.configuration, ...usage });
+    switch (reviewer.backend) {
+      case "agent":
+        return agent();
+      case "chat":
+        return new OversizeFallbackReviewer({ primary: chat() });
+      case "decision": {
+        const onOversize = reviewer.decision?.onOversize ?? "escalate";
+        return new OversizeFallbackReviewer({
+          primary: new DecisionReviewer({ configuration: input.configuration, ...usage }),
+          ...(onOversize === "agent" ? { fallback: agent() } : {}),
+          ...(onOversize === "chat" ? { fallback: chat() } : {}),
+        });
+      }
+    }
+  },
 };
 
 /**

@@ -25,7 +25,8 @@ export const usageRecordSchema = z.object({
   inputTokens: z.nullable(z.int().check(z.gte(0))),
   outputTokens: z.nullable(z.int().check(z.gte(0))),
   latencyMs: z.number().check(z.gte(0), z.lte(86_400_000)),
-  verdict: z.enum(["allow", "deny", "escalate", "error"]),
+  /** `oversize`: too large for the decision model, so not sent (or refused). */
+  verdict: z.enum(["allow", "deny", "escalate", "error", "oversize"]),
   /** Priced when the review ran; `null` for a model without a known price. */
   costUSD: z.nullable(z.number().check(z.gte(0), z.lte(1_000_000))),
 });

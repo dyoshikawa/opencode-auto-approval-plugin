@@ -7,7 +7,7 @@ import {
   reviewerAllowedTools,
 } from "./agent-reviewer.js";
 import type { ModelReference } from "./config.js";
-import { parsePluginConfiguration } from "./config.js";
+import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
 import type { ReviewSessionClient } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { isRecord, reviewForApproval, reviewToolCallOrThrow, textFromParts } from "./shared.js";
@@ -122,8 +122,9 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
 
     return {
       config: async (config) => {
-        // The decision backend needs no reviewer agent.
-        if (configuration.reviewer.backend !== "agent") return;
+        // Only the agent reviewer, as the backend or the decision backend's
+        // oversize fallback, needs the reviewer agent.
+        if (!usesAgentReviewer(configuration)) return;
         config.agent ??= {};
         config.agent[reviewerAgentName] = reviewerAgentConfig();
       },
