@@ -357,18 +357,18 @@ describe("DecisionReviewer with Cloudflare Workers AI", () => {
   });
 });
 
-describe("DecisionReviewer usage records", () => {
-  function recordingReviewer(input: { response: () => Promise<Response> }) {
-    const records: UsageRecord[] = [];
-    const reviewer = new DecisionReviewer({
-      configuration: configuration(),
-      fetch: vi.fn<typeof globalThis.fetch>(input.response),
-      recordUsage: (record) => records.push(record),
-      project: "project-id",
-    });
-    return { reviewer, records };
-  }
+function recordingReviewer(input: { response: () => Promise<Response> }) {
+  const records: UsageRecord[] = [];
+  const reviewer = new DecisionReviewer({
+    configuration: configuration(),
+    fetch: vi.fn<typeof globalThis.fetch>(input.response),
+    recordUsage: (record) => records.push(record),
+    project: "project-id",
+  });
+  return { reviewer, records };
+}
 
+describe("DecisionReviewer usage records", () => {
   it("records the tokens, the cost and the final verdict of a review", async () => {
     const { reviewer, records } = recordingReviewer({
       response: async () => answer({ choice: "allow", probabilities: { allow: 0.45 } }),
