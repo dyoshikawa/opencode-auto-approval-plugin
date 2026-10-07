@@ -25,6 +25,18 @@ function line(input: Partial<UsageRecord>): string {
   });
 }
 
+async function run(argv: string[]): Promise<{ code: number; output: string; error: string }> {
+  let output = "";
+  let error = "";
+  const code = await main({
+    argv,
+    now,
+    write: (text) => (output += text),
+    writeError: (text) => (error += text),
+  });
+  return { code, output, error };
+}
+
 describe("stats command", () => {
   let directory: string;
   let file: string;
@@ -49,18 +61,6 @@ describe("stats command", () => {
   afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
   });
-
-  async function run(argv: string[]): Promise<{ code: number; output: string; error: string }> {
-    let output = "";
-    let error = "";
-    const code = await main({
-      argv,
-      now,
-      write: (text) => (output += text),
-      writeError: (text) => (error += text),
-    });
-    return { code, output, error };
-  }
 
   it("defaults to the current year and skips malformed lines", async () => {
     const { code, output } = await run(["stats", "--file", file]);
