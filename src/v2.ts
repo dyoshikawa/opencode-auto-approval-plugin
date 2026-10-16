@@ -24,6 +24,11 @@ const pluginID = "opencode-auto-approval-plugin";
 
 type Context = Plugin.Context;
 
+/** Identifies the invocation that already passed AI review. */
+function grantKey(call: { sessionID: string; messageID: string; id: string }): string {
+  return JSON.stringify([call.sessionID, call.messageID, call.id]);
+}
+
 /** V2 model references use `id`; the plugin configuration keeps V1's `modelID`. */
 function toModelRef(model: ModelReference): { providerID: string; id: string } {
   return { providerID: model.providerID, id: model.modelID };
@@ -174,8 +179,6 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         string,
         { agent: string; revision: number | undefined; expiresAt: number }
       >();
-      const grantKey = (call: { sessionID: string; messageID: string; id: string }) =>
-        JSON.stringify([call.sessionID, call.messageID, call.id]);
       const grantLifetimeMs = 5 * 60_000;
 
       await context.permission.hook("evaluate", (event) => {
