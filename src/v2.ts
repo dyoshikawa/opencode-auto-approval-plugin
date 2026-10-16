@@ -195,7 +195,9 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
           nativeGrants.delete(key);
           return;
         }
-        if (grant.agent !== event.agent || grant.revision !== revisions.get(event.sessionID)) {
+        // A mismatched agent must not consume another agent's approval.
+        if (grant.agent !== event.agent) return;
+        if (grant.revision !== revisions.get(event.sessionID)) {
           nativeGrants.delete(key);
           return;
         }
