@@ -420,6 +420,32 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(matched.effect).toBe("allow");
   });
 
+  it("invalidates an approved native grant after a new user prompt", async () => {
+    const { context, hooks } = createContext({ options: { mode: "all-tools" } });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+
+    await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "read the file" } });
+    await hooks["tool.execute.before"]?.({
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
+    });
+
+    // A subsequent user request can revoke or change the authorization.
+    await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "stop" } });
+    const native = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
+    await hooks["permission.evaluate"]?.(native);
+    expect(native.effect).toBe("ask");
+  });
+
   it.each(["deny", "escalate"] as const)(
     "never grants native permissions after an AI %s verdict",
     async (verdict) => {
