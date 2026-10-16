@@ -85,6 +85,16 @@ function askEvent(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function nativeAskEvent(overrides: Record<string, unknown> = {}) {
+  return askEvent({
+    sessionID: "session-1",
+    agent: "explore",
+    action: "shell",
+    source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    ...overrides,
+  });
+}
+
 describe("V2 plugin (opencode 2.x)", () => {
   it.each(["on-ask", "all-tools"])(
     "cancels stale %s approval even if the new prompt text repeats",
@@ -396,26 +406,18 @@ describe("V2 plugin (opencode 2.x)", () => {
       input: { command: "ls" },
     });
 
-    const native = (overrides: Record<string, unknown> = {}) =>
-      askEvent({
-        sessionID: "session-1",
-        agent: "explore",
-        action: "shell",
-        source: { type: "tool", messageID: "msg-1", id: "call-1" },
-        ...overrides,
-      });
     const mismatches = [
-      native({ sessionID: "session-other" }),
-      native({ agent: "build" }),
-      native({ source: { type: "tool", messageID: "msg-other", id: "call-1" } }),
-      native({ source: { type: "tool", messageID: "msg-1", id: "call-other" } }),
-      native({ source: undefined }),
+      nativeAskEvent({ sessionID: "session-other" }),
+      nativeAskEvent({ agent: "build" }),
+      nativeAskEvent({ source: { type: "tool", messageID: "msg-other", id: "call-1" } }),
+      nativeAskEvent({ source: { type: "tool", messageID: "msg-1", id: "call-other" } }),
+      nativeAskEvent({ source: undefined }),
     ];
     for (const event of mismatches) {
       await hooks["permission.evaluate"]?.(event);
       expect(event.effect).toBe("ask");
     }
-    const matched = native();
+    const matched = nativeAskEvent();
     await hooks["permission.evaluate"]?.(matched);
     expect(matched.effect).toBe("allow");
   });
