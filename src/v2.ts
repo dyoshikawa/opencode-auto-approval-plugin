@@ -170,7 +170,10 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       // V2 invokes execute.before before a tool's own native permission checks.
       // Carry an AI "allow" only to permission assertions from that exact tool call.
       // In particular, do not grant an entire session or agent permanent access.
-      const nativeGrants = new Map<string, { agent: string; expiresAt: number }>();
+      const nativeGrants = new Map<
+        string,
+        { agent: string; revision: number | undefined; expiresAt: number }
+      >();
       const grantKey = (call: { sessionID: string; messageID: string; id: string }) =>
         JSON.stringify([call.sessionID, call.messageID, call.id]);
       const grantLifetimeMs = 5 * 60_000;
@@ -189,7 +192,10 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
           nativeGrants.delete(key);
           return;
         }
-        if (grant.agent !== event.agent) return;
+        if (grant.agent !== event.agent || grant.revision !== revisions.get(event.sessionID)) {
+          nativeGrants.delete(key);
+          return;
+        }
 
         // Core has already rejected explicit native deny rules before this hook.
         // The reviewer approval covers all native assertions within this call
@@ -227,7 +233,11 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         if (revisions.get(event.sessionID) !== revision) {
           throw new Error("User intent changed during review; human review is required.");
         }
-        nativeGrants.set(key, { agent: event.agent, expiresAt: Date.now() + grantLifetimeMs });
+        nativeGrants.set(key, {
+          agent: event.agent,
+          revision,
+          expiresAt: Date.now() + grantLifetimeMs,
+        });
       });
     },
   };
