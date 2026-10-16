@@ -25,6 +25,7 @@ function createContext(input: { options?: Record<string, unknown> } = {}) {
       },
     ]),
     interrupt: vi.fn(async () => ({})),
+    remove: vi.fn(async () => ({})),
     get: vi.fn(async () => ({ id: "session-1", model: { providerID: "openai", id: "gpt-5.6" } })),
     hook: vi.fn(async (name: string, callback: Hook) => {
       hooks[`session.${name}`] = callback;
@@ -453,6 +454,35 @@ describe("V2 session client", () => {
     await expect(client.prompt({ sessionID: "review-session", text: "" })).rejects.toThrow(
       "Reviewer session failed: no model",
     );
+  });
+
+  it("links review sessions to their parent without relaxing reviewer permissions", async () => {
+    const { context, session } = createContext();
+    const client = createV2SessionClient(context as never);
+
+    await client.create({ parentID: "main-session" });
+
+    expect(session.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Auto-approval review",
+        agent: "auto-approval-reviewer",
+        parentID: "main-session",
+        permissions: [
+          { action: "*", resource: "*", effect: "deny" },
+          { action: "read", resource: "*", effect: "allow" },
+          { action: "glob", resource: "*", effect: "allow" },
+          { action: "grep", resource: "*", effect: "allow" },
+          { action: "lsp", resource: "*", effect: "allow" },
+        ],
+      }),
+    );
+  });
+
+  it("removes a completed review session", async () => {
+    const { context, session } = createContext();
+    const client = createV2SessionClient(context as never);
+    await client.remove?.({ sessionID: "review-session" });
+    expect(session.remove).toHaveBeenCalledWith({ sessionID: "review-session" });
   });
 
   it("interrupts the session on abort", async () => {

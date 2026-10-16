@@ -51,6 +51,7 @@ export class AgentReviewer implements Reviewer {
       );
     }
     const { sessionID } = await this.#client.create({
+      parentID: input.sessionID,
       model: this.#configuration.reviewer.agent.model ?? input.model,
     });
     this.#reviewerSessionIDs.add(sessionID);
@@ -65,7 +66,15 @@ export class AgentReviewer implements Reviewer {
       void this.#client.abort({ sessionID }).catch(() => undefined);
       throw error;
     } finally {
-      this.#reviewerSessionIDs.delete(sessionID);
+      try {
+        // V2 removes temporary sessions; V1 keeps its existing behavior.
+        // Cleanup must never replace the review verdict or error.
+        await this.#client.remove?.({ sessionID });
+      } catch {
+        // The parent relationship still keeps an orphan out of the top-level list.
+      } finally {
+        this.#reviewerSessionIDs.delete(sessionID);
+      }
     }
   }
 }
