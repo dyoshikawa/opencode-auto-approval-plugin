@@ -3,6 +3,8 @@ export type Fetch = typeof globalThis.fetch;
 /** The most of an error body read, to classify a refusal without buffering a large one. */
 const MAX_ERROR_BODY_CHARS = 4_096;
 
+type KeyHeader = "bearer" | "x-api-key";
+
 export type PostResult = { ok: true; body: unknown } | { ok: false; status: number; text: string };
 
 /**
@@ -17,6 +19,8 @@ export async function postJSON(input: {
   fetch: Fetch;
   url: string;
   apiKey: string;
+  /** How the key is sent: `Authorization: Bearer` (default) or Anthropic's `x-api-key`. */
+  auth?: KeyHeader;
   body: unknown;
   /** Extra request headers, such as a provider feature flag. */
   headers?: Record<string, string>;
@@ -45,6 +49,7 @@ async function send(input: {
   fetch: Fetch;
   url: string;
   apiKey: string;
+  auth?: KeyHeader;
   body: unknown;
   headers?: Record<string, string>;
   label: string;
@@ -93,17 +98,23 @@ async function readHead(response: Response): Promise<string> {
   return text.slice(0, MAX_ERROR_BODY_CHARS);
 }
 
-/** Extra headers, lowercased so that none of them can replace the key or the content type. */
+/** Extra headers, lowercased so that none of them can replace a key or the content type. */
 function requestHeaders(input: {
   apiKey: string;
+  auth?: KeyHeader;
   headers?: Record<string, string>;
 }): Record<string, string> {
   const extra = Object.fromEntries(
-    Object.entries(input.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
+    Object.entries(input.headers ?? {})
+      .map(([name, value]) => [name.toLowerCase(), value])
+      // Neither key header may come from the extra ones.
+      .filter(([name]) => name !== "authorization" && name !== "x-api-key"),
   );
   return {
     ...extra,
-    authorization: `Bearer ${input.apiKey}`,
+    ...(input.auth === "x-api-key"
+      ? { "x-api-key": input.apiKey }
+      : { authorization: `Bearer ${input.apiKey}` }),
     "content-type": "application/json",
   };
 }

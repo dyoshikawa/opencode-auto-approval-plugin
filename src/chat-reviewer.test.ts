@@ -233,3 +233,137 @@ describe("ChatReviewer", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+function anthropicReviewer(input: { response: (prompt: string) => Response }) {
+  const records: UsageRecord[] = [];
+  const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+    input.response(JSON.parse(String(init?.body)).messages[0].content),
+  );
+  const reviewer = new ChatReviewer({
+    configuration: parsePluginConfiguration({
+      options: {
+        reviewer: {
+          backend: "chat",
+          chat: { provider: "anthropic", model: "claude-haiku-5-5" },
+        },
+      },
+      env: { ANTHROPIC_API_KEY: "ant-key" },
+    }),
+    fetch,
+    recordUsage: (record) => records.push(record),
+    project: "p",
+  });
+  return { reviewer, fetch, records };
+}
+
+function anthropicMessage(input: {
+  prompt: string;
+  reply?: string;
+  stopReason?: string;
+  usage?: Record<string, number>;
+}): Response {
+  return Response.json({
+    id: "msg_1",
+    type: "message",
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "", signature: "sig" },
+      {
+        type: "text",
+        text: echoCheck(
+          input.reply ?? '{"verdict":"allow","reason":"Runs the tests."}',
+          input.prompt,
+        ),
+      },
+    ],
+    stop_reason: input.stopReason ?? "end_turn",
+    usage: input.usage ?? {
+      input_tokens: 700,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 100,
+      output_tokens: 42,
+    },
+  });
+}
+
+describe("ChatReviewer with the anthropic provider", () => {
+  it("asks once through the Messages API with the key in x-api-key", async () => {
+    const { reviewer, fetch, records } = anthropicReviewer({
+      response: (prompt) => anthropicMessage({ prompt }),
+    });
+
+    await expect(reviewer.review(request)).resolves.toEqual({
+      verdict: "allow",
+      reason: "Runs the tests.",
+    });
+
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    expect(init).toMatchObject({
+      method: "POST",
+      redirect: "error",
+      headers: { "x-api-key": "ant-key", "anthropic-version": "2023-06-01" },
+    });
+    expect(new Headers(init?.headers).get("authorization")).toBeNull();
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({ model: "claude-haiku-5-5", max_tokens: 16_000 });
+    expect(typeof body.system).toBe("string");
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0].content).toContain('"command":"pnpm test"');
+    expect(records).toMatchObject([
+      { provider: "chat", model: "claude-haiku-5-5", inputTokens: 800, outputTokens: 42 },
+    ]);
+  });
+
+  it.each([
+    ["refusal", "refused to review"],
+    ["max_tokens", "cut at max_tokens"],
+  ])("fails a reply that stopped with %s", async (stopReason, error) => {
+    const { reviewer } = anthropicReviewer({
+      response: (prompt) => anthropicMessage({ prompt, stopReason }),
+    });
+
+    await expect(reviewer.review(request)).rejects.toThrow(error);
+  });
+
+  it("treats prompt is too long as oversize", async () => {
+    const { reviewer, records } = anthropicReviewer({
+      response: () =>
+        Response.json(
+          {
+            type: "error",
+            error: {
+              type: "invalid_request_error",
+              message: "prompt is too long: 250000 tokens > 200000 maximum",
+            },
+          },
+          { status: 400 },
+        ),
+    });
+
+    await expect(reviewer.review(request)).rejects.toBeInstanceOf(OversizeError);
+    expect(records).toMatchObject([{ verdict: "oversize" }]);
+  });
+
+  it("treats a prompt the server visibly cut as too large", async () => {
+    const { reviewer } = anthropicReviewer({
+      response: (prompt) =>
+        anthropicMessage({
+          prompt,
+          usage: { input_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        }),
+    });
+
+    await expect(reviewer.review(request)).rejects.toBeInstanceOf(OversizeError);
+  });
+
+  it("reports any other refusal by status only", async () => {
+    const { reviewer } = anthropicReviewer({
+      response: () => new Response("overloaded: secret detail", { status: 529 }),
+    });
+
+    await expect(reviewer.review(request)).rejects.toThrow(
+      /^Chat model request failed with HTTP 529\.$/,
+    );
+  });
+});

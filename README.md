@@ -8,7 +8,7 @@ The reviewer is one of three backends:
 | `reviewer.backend` | How it reviews                                                                                                                                                                                                                                                                     |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `agent` (default)  | An LLM in its own OpenCode session (or, with an [agent runtime](#agent-runtimes), in Claude Code or Codex). It may inspect the workspace with `read`, `glob`, `grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or start subagents. |
-| `chat`             | An LLM asked once through an OpenAI-compatible Chat Completions API — OpenAI, OpenRouter, Workers AI, a local server — with the same prompt as the agent but no session and no tools.                                                                                              |
+| `chat`             | An LLM asked once through the OpenAI or Anthropic API, or any OpenAI-compatible Chat Completions API — OpenRouter, Workers AI, a local server — with the same prompt as the agent but no session and no tools.                                                                     |
 | `decision`         | A [decision model](#decision-backend) over HTTP — TypeSafe AI's Jev or Cloudflare's Clef — that picks `allow`, `deny` or `escalate` with calibrated probabilities in one call.                                                                                                     |
 
 Names used by earlier versions keep working; see [deprecated names](#deprecated-names).
@@ -355,27 +355,60 @@ second left, or if that second request fails, the refusal stands.
 
 ### Chat backend
 
-Set `reviewer.backend` to `"chat"` to have an LLM review each operation in a single request to an
-OpenAI-compatible `POST <baseURL>/chat/completions`, or use it only as the decision backend's
+Set `reviewer.backend` to `"chat"` to have an LLM review each operation in a single request — to an
+OpenAI-compatible `POST <baseURL>/chat/completions`, or to the OpenAI or Anthropic API with their own
+keys — or use it only as the decision backend's
 `onOversize` fallback. It sends the agent reviewer's prompt — the user's instructions, then the
 operation inside a random boundary it is told never to take instructions from — and reads back a
 `{"verdict","reason"}` JSON object. There is no session and no tool, so it judges the operation data
 alone, and the plugin needs an API key of its own.
 
-| Option                        | Default                                                         | Description                                                                    |
-| ----------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `reviewer.chat.model`         | — (required)                                                    | Model ID as the endpoint names it, such as `openai/gpt-5.6-luna` on OpenRouter |
-| `reviewer.chat.apiKey`        | `AUTO_APPROVAL_CHAT_API_KEY`                                    | Bearer token for the endpoint                                                  |
-| `reviewer.chat.baseURL`       | `AUTO_APPROVAL_CHAT_BASE_URL`, else `https://api.openai.com/v1` | Base URL up to `/chat/completions`; HTTPS (HTTP only for loopback)             |
-| `reviewer.chat.maxInputBytes` | `200000`                                                        | A prompt longer than this (UTF-8 bytes) is too large and escalates unsent      |
+| Option                   | Default                                                         | Description                                                                                  |
+| ------------------------ | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `reviewer.chat.provider` | `"openai-compatible"`                                           | `"openai-compatible"`, `"openai"` or `"anthropic"` (below)                                   |
+| `reviewer.chat.model`    | — (required)                                                    | Model ID as the endpoint names it, such as `openai/gpt-5.6-luna` on OpenRouter               |
+| `reviewer.chat.apiKey`   | per provider (below)                                            | API key for the endpoint                                                                     |
+| `reviewer.chat.baseURL`  | `AUTO_APPROVAL_CHAT_BASE_URL`, else `https://api.openai.com/v1` | `openai-compatible` only: base URL up to `/chat/completions`; HTTPS (HTTP only for loopback) |
 
-- As with TypeSafe, the key and the base URL come from the same place: `reviewer.chat.apiKey`
+| `reviewer.chat.provider`        | Endpoint                                               | Key, when `reviewer.chat.apiKey` is unset |
+| ------------------------------- | ------------------------------------------------------ | ----------------------------------------- |
+| `"openai-compatible"` (default) | `<baseURL>/chat/completions`                           | `AUTO_APPROVAL_CHAT_API_KEY`              |
+| `"openai"`                      | `https://api.openai.com/v1/chat/completions`           | `OPENAI_API_KEY`                          |
+| `"anthropic"`                   | `https://api.anthropic.com/v1/messages` (Messages API) | `ANTHROPIC_API_KEY`                       |
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "reviewer": {
+          "backend": "chat",
+          "chat": { "provider": "anthropic", "model": "claude-haiku-5-5" },
+        },
+      },
+    },
+  ],
+}
+```
+
+| `reviewer.chat.maxInputBytes` | `200000` | A prompt longer than this (UTF-8 bytes) is too large and escalates unsent |
+
+- `openai` and `anthropic` always call the vendor's own host, so they take no `baseURL` (setting
+  one fails at startup) and their key never reaches another server. They read the vendor's usual
+  key variable, which other tools may already export. A Claude Code or Codex sign-in is not an
+  API key and cannot be used here; [agent runtimes](#agent-runtimes) use those. `anthropic`
+  sends the key in `x-api-key` with `anthropic-version: 2023-06-01` and allows 16,000 output
+  tokens for models that think before answering; a reply stopped by a refusal or at `max_tokens`
+  is handled like any other reviewer failure.
+- For `openai-compatible`, as with TypeSafe, the key and the base URL come from the same place: `reviewer.chat.apiKey`
   with `reviewer.chat.baseURL`, or `AUTO_APPROVAL_CHAT_API_KEY` with `AUTO_APPROVAL_CHAT_BASE_URL`,
   never one from each. OpenCode substitutes `{env:NAME}` in plugin options, so an existing variable
   such as `OPENROUTER_API_KEY` can be used without writing the key down.
 - The same safeguards apply as for the decision backend: redirects are refused, the timeout covers
   the whole response, errors report the HTTP status only, and an over-long prompt
-  (`context_length_exceeded`, a context length, size or window message, or HTTP 413) counts as too
+  (`context_length_exceeded`, Anthropic's "prompt is too long", a context length, size or window
+  message, or HTTP 413) counts as too
   large.
 - Keep `maxInputBytes` within what the server reads whole: for a local server, no more bytes than
   its context has tokens (Ollama's `num_ctx`) less room for the answer and the chat template, a few
