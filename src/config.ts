@@ -23,6 +23,20 @@ const decisionProviders = ["typesafe", "cloudflare"] as const;
 
 type ReviewerMode = (typeof reviewerModes)[number];
 
+/**
+ * Where the agent reviewer runs: a read-only OpenCode session, Claude Code
+ * through the Claude Agent SDK, or Codex through the Codex SDK.
+ */
+const agentRuntimes = ["opencode", "claude-agent-sdk", "codex-sdk"] as const;
+
+/** The runtimes driven through an SDK, and the option holding each one's package directory. */
+const sdkRuntimes = {
+  "claude-agent-sdk": { option: "claudeAgentSdk", example: "claude-sonnet-5-5" },
+  "codex-sdk": { option: "codexSdk", example: "gpt-5.6-codex" },
+} as const;
+
+type SdkRuntime = keyof typeof sdkRuntimes;
+
 type ReviewerBackend = "agent" | "chat" | "decision";
 
 /** What the decision backend does with an operation too large for its model. */
@@ -71,18 +85,34 @@ export type ChatConfiguration = {
   maxInputBytes: number;
 };
 
+type AgentConfiguration = {
+  /** Prompts longer than this, in UTF-8 bytes, escalate unsent. */
+  maxInputBytes: number;
+} & (
+  | {
+      runtime: "opencode";
+      /** The reviewer session's model; the main session's when unset. */
+      model?: ModelReference;
+    }
+  | {
+      runtime: SdkRuntime;
+      /** A model name for Claude Code or Codex; the tool's own default when unset. */
+      model?: string;
+      /**
+       * The installed SDK package directory, used instead of importing it from
+       * where the plugin is installed.
+       */
+      sdkPath?: string;
+    }
+);
+
 export type PluginConfiguration = {
   mode: ReviewerMode;
   auditLog: { enabled: boolean; includeCommand: boolean; path?: string };
   conversation: { enabled: boolean; includeAssistant: boolean };
   reviewer: {
     backend: ReviewerBackend;
-    agent: {
-      /** The reviewer session's model; the main session's when unset. */
-      model?: ModelReference;
-      /** Prompts longer than this, in UTF-8 bytes, escalate unsent. */
-      maxInputBytes: number;
-    };
+    agent: AgentConfiguration;
     timeoutMs: number;
     /** The user's own review policy, added to every review as trusted guidance. */
     instructions?: string;
@@ -155,9 +185,18 @@ const modelReferenceSchema = z.object({
   modelID: z.string(),
 });
 
+const sdkOptionsSchema = z.object({
+  path: z.optional(z.string().check(z.refine(isAbsolute))),
+});
+
 const agentOptionsSchema = z.object({
-  model: z.optional(modelReferenceSchema),
+  runtime: z.optional(z.enum(agentRuntimes)),
+  // An OpenCode provider/model pair, or a Claude model name for the Claude
+  // Agent SDK; which one is checked against the runtime.
+  model: z.optional(z.union([modelReferenceSchema, z.string().check(z.minLength(1))])),
   maxInputBytes: z.optional(z.int().check(z.gte(1_000), z.lte(4_000_000))),
+  claudeAgentSdk: z.optional(sdkOptionsSchema),
+  codexSdk: z.optional(sdkOptionsSchema),
 });
 
 const decisionOptionsShape = {
@@ -316,13 +355,15 @@ function normalizedBackend(
 }
 
 /**
- * Whether the read-only reviewer agent is used: as the backend, or for
- * operations too large for the decision model.
+ * Whether the read-only OpenCode reviewer agent is used: as the backend, or
+ * for operations too large for the decision model. The SDK runtimes review
+ * outside OpenCode and need no agent there.
  */
 export function usesAgentReviewer(configuration: PluginConfiguration): boolean {
   return (
-    configuration.reviewer.backend === "agent" ||
-    configuration.reviewer.decision?.onOversize === "agent"
+    configuration.reviewer.agent.runtime === "opencode" &&
+    (configuration.reviewer.backend === "agent" ||
+      configuration.reviewer.decision?.onOversize === "agent")
   );
 }
 
@@ -368,13 +409,57 @@ function rejectMixedNames(reviewer: ReviewerOptions | undefined): void {
   }
 }
 
-/** `agent.model`, or the deprecated `reviewer.model`. */
-function agentConfiguration(
-  reviewer: ReviewerOptions | undefined,
-): PluginConfiguration["reviewer"]["agent"] {
-  const model = reviewer?.agent?.model ?? reviewer?.model;
-  const maxInputBytes = reviewer?.agent?.maxInputBytes ?? defaultMaxLLMInputBytes;
-  return model === undefined ? { maxInputBytes } : { model, maxInputBytes };
+/** `agent.model`, or the deprecated `reviewer.model`, checked against the runtime. */
+function agentConfiguration(reviewer: ReviewerOptions | undefined): AgentConfiguration {
+  const agent = reviewer?.agent ?? {};
+  const model = agent.model ?? reviewer?.model;
+  const maxInputBytes = agent.maxInputBytes ?? defaultMaxLLMInputBytes;
+  const runtime = agent.runtime ?? "opencode";
+  // Options for another runtime would be silently ignored.
+  for (const [name, { option }] of Object.entries(sdkRuntimes)) {
+    if (agent[option] !== undefined && runtime !== name) {
+      throw new Error(
+        `Invalid auto-approval plugin options: reviewer.agent.${option} needs reviewer.agent.runtime "${name}".`,
+      );
+    }
+  }
+  if (runtime !== "opencode") {
+    return sdkAgentConfiguration({
+      runtime,
+      model,
+      maxInputBytes,
+      sdkPath: agent[sdkRuntimes[runtime].option]?.path,
+    });
+  }
+  if (typeof model === "string") {
+    throw new Error(
+      'Invalid auto-approval plugin options: with the "opencode" runtime, reviewer.agent.model must be { providerID, modelID }.',
+    );
+  }
+  return {
+    runtime: "opencode",
+    maxInputBytes,
+    ...(model === undefined ? {} : { model }),
+  };
+}
+
+function sdkAgentConfiguration(input: {
+  runtime: SdkRuntime;
+  model: string | ModelReference | undefined;
+  maxInputBytes: number;
+  sdkPath: string | undefined;
+}): AgentConfiguration {
+  if (input.model !== undefined && typeof input.model !== "string") {
+    throw new Error(
+      `Invalid auto-approval plugin options: with the "${input.runtime}" runtime, reviewer.agent.model must be a model name such as "${sdkRuntimes[input.runtime].example}".`,
+    );
+  }
+  return {
+    runtime: input.runtime,
+    maxInputBytes: input.maxInputBytes,
+    ...(input.model === undefined ? {} : { model: input.model }),
+    ...(input.sdkPath === undefined ? {} : { sdkPath: input.sdkPath }),
+  };
 }
 
 /**

@@ -5,11 +5,11 @@ before automatically approving them.
 
 The reviewer is one of three backends:
 
-| `reviewer.backend` | How it reviews                                                                                                                                                                                             |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent` (default)  | An LLM in its own OpenCode session. It may inspect the workspace with `read`, `glob`, `grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or start subagents. |
-| `chat`             | An LLM asked once through an OpenAI-compatible Chat Completions API — OpenAI, OpenRouter, Workers AI, a local server — with the same prompt as the agent but no session and no tools.                      |
-| `decision`         | A [decision model](#decision-backend) over HTTP — TypeSafe AI's Jev or Cloudflare's Clef — that picks `allow`, `deny` or `escalate` with calibrated probabilities in one call.                             |
+| `reviewer.backend` | How it reviews                                                                                                                                                                                                                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent` (default)  | An LLM in its own OpenCode session (or, with an [agent runtime](#agent-runtimes), in Claude Code or Codex). It may inspect the workspace with `read`, `glob`, `grep`, and `lsp`, but cannot edit files, run shell commands, access the network, use MCP tools, or start subagents. |
+| `chat`             | An LLM asked once through an OpenAI-compatible Chat Completions API — OpenAI, OpenRouter, Workers AI, a local server — with the same prompt as the agent but no session and no tools.                                                                                              |
+| `decision`         | A [decision model](#decision-backend) over HTTP — TypeSafe AI's Jev or Cloudflare's Clef — that picks `allow`, `deny` or `escalate` with calibrated probabilities in one call.                                                                                                     |
 
 Names used by earlier versions keep working; see [deprecated names](#deprecated-names).
 
@@ -121,6 +121,66 @@ remains entirely in OpenCode.
 }
 ```
 
+### Agent runtimes
+
+`reviewer.agent.runtime` chooses where the `agent` reviewer runs. It applies wherever the agent
+reviewer does, including the decision backend's `onOversize: "agent"` fallback.
+
+| `reviewer.agent.runtime` | Where the review runs                                                                          |
+| ------------------------ | ---------------------------------------------------------------------------------------------- |
+| `"opencode"` (default)   | A read-only OpenCode session, as described above                                               |
+| `"claude-agent-sdk"`     | Claude Code through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) |
+| `"codex-sdk"`            | Codex through the [Codex SDK](https://github.com/openai/codex/tree/main/sdk/typescript)        |
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "reviewer": {
+          "agent": {
+            "runtime": "claude-agent-sdk",
+            "model": "claude-haiku-5-5",
+            "claudeAgentSdk": {
+              "path": "/usr/local/lib/node_modules/@anthropic-ai/claude-agent-sdk",
+            },
+          },
+        },
+      },
+    },
+  ],
+}
+```
+
+- The SDKs are optional peer dependencies, and OpenCode does not install them with the plugin.
+  Install the one you use (`npm install -g @anthropic-ai/claude-agent-sdk` or
+  `npm install -g @openai/codex-sdk`) and point `reviewer.agent.claudeAgentSdk.path` or
+  `reviewer.agent.codexSdk.path` at the installed package directory (under `npm root -g`); the
+  path must be absolute. Without a path the plugin imports the SDK from where it is installed
+  itself, which works when you install the plugin from your own `package.json`.
+- `reviewer.agent.model` is a model name for these runtimes (`"claude-haiku-5-5"`,
+  `"gpt-5.6-codex"`); unset, Claude Code or Codex uses its own default. Authentication is theirs
+  too: a `claude` or `codex` sign-in, or `ANTHROPIC_API_KEY` / `CODEX_API_KEY` in the environment
+  of the process that loads the plugin. The plugin never reads those keys.
+- Both run in **auto mode**, since nobody is there to answer a permission prompt:
+  - Claude Code gets only its `Read`, `Glob` and `Grep` tools, `permissionMode: "auto"`, and no
+    settings from disk — no CLAUDE.md, hooks, MCP servers, plugins or permission rules from you or
+    the project. A call auto mode cannot decide is denied.
+  - Codex inspects the workspace through shell commands, so it runs in the `read-only` sandbox
+    without network access or web search, with `approval_policy = "on-request"` and
+    `approvals_reviewer = "auto_review"` (what `codex exec --approve-for-me` uses), and without
+    the project's `AGENTS.md`. Your own `~/.codex/config.toml` still loads, MCP servers included.
+- Auto mode lets the reviewer read files outside the project when its classifier judges the read
+  safe: measured on 2026-10-17, Claude Code read `/etc/hostname` and searched `/home` when asked
+  to, and Codex's read-only sandbox can read the whole disk. What it reads reaches the model
+  provider and, cut to 300 characters, the verdict reason. Use the `"opencode"` runtime if that is
+  not acceptable.
+- Reviews run in Claude Code or Codex, not in OpenCode, so they are not in `opencode stats`; they
+  go to the [usage log](#usage-and-cost-statistics) instead (`claude-agent-sdk` with Claude
+  Code's own cost estimate, `codex-sdk` without a price). Measured on 2026-10-17, a Claude Code
+  review on `claude-haiku-5-5` took about 4 seconds and $0.001.
+
 ### Decision backend
 
 Set `reviewer.backend` to `"decision"` to have a decision model judge each operation instead of an
@@ -170,6 +230,9 @@ same System One API:
 | `reviewer.decision.longContext`         | off                       | `typesafe` only: `true` or `{ maxStateTokens, minAllowProbability }` to send larger operations with [long context](#long-context-typesafe) |
 | `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer                                                       |
 | `reviewer.agent.maxInputBytes`          | `200000`                  | The agent reviewer escalates a prompt longer than this (UTF-8 bytes) unsent rather than let the session compact it                         |
+| `reviewer.agent.runtime`                | `"opencode"`              | Where the agent reviewer runs: `"opencode"`, `"claude-agent-sdk"` or `"codex-sdk"` ([agent runtimes](#agent-runtimes))                     |
+| `reviewer.agent.claudeAgentSdk.path`    | —                         | `claude-agent-sdk` only: absolute path of the installed `@anthropic-ai/claude-agent-sdk` package directory                                 |
+| `reviewer.agent.codexSdk.path`          | —                         | `codex-sdk` only: absolute path of the installed `@openai/codex-sdk` package directory                                                     |
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the
@@ -340,7 +403,7 @@ alone, and the plugin needs an API key of its own.
 
 ### Usage and cost statistics
 
-Each decision or chat review appends one line to a usage log at
+Each decision, chat, Claude Agent SDK or Codex SDK review appends one line to a usage log at
 `$XDG_DATA_HOME/opencode-auto-approval-plugin/usage.jsonl` (`~/.local/share/…` when `XDG_DATA_HOME`
 is unset): the time, provider, model, a hash of the project directory, input and output tokens,
 latency, the verdict (`error` for a failed call, `oversize` for an operation too large to send),
@@ -349,7 +412,8 @@ unsent `oversize` attempt and the fallback's review; the latency column leaves `
 operation, your prompt and the reason are never written, and the file is created readable by you
 only. The project hash keeps the path out of the file but is not a secret — anyone who guesses a
 path can hash it and match it — so treat the log as private before sharing it. Reviews with the
-`agent` backend run in OpenCode sessions, so `opencode stats` already counts them.
+`agent` backend on the default `opencode` runtime run in OpenCode sessions, so `opencode stats`
+already counts them.
 
 Show the totals with the bundled command, modelled on `opencode stats`:
 

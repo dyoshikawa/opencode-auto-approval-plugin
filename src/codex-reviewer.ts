@@ -1,0 +1,183 @@
+import type { CodexOptions, RunResult, ThreadOptions, TurnOptions } from "@openai/codex-sdk";
+
+import { agentReviewPrompt } from "./agent-reviewer.js";
+import type { PluginConfiguration } from "./config.js";
+import {
+  OversizeError,
+  parseVerdict,
+  type Reviewer,
+  type ReviewRequest,
+  type ReviewVerdict,
+} from "./reviewer.js";
+import { importSdk } from "./sdk-loader.js";
+import type { UsageRecorder } from "./usage.js";
+
+const sdkPackage = "@openai/codex-sdk";
+
+/** The subset of the SDK's `Codex` class the reviewer uses. */
+type CodexClient = {
+  startThread(options: ThreadOptions): {
+    run(input: string, options: TurnOptions): Promise<Pick<RunResult, "finalResponse" | "usage">>;
+  };
+};
+
+export type CreateCodex = (options: CodexOptions) => CodexClient;
+
+const codexReviewerInstructions =
+  "You are a security reviewer. You may inspect the workspace only by reading files and searching them. Never modify files, access the network, use MCP tools, or delegate work.";
+
+/**
+ * The agent reviewer on Codex through the Codex SDK. Codex inspects the
+ * workspace through shell commands, so the session runs in the read-only
+ * sandbox without network access, ignores the project's AGENTS.md, and runs
+ * in auto mode: every approval request goes to Codex's automatic reviewer,
+ * since nobody is there to answer it.
+ */
+export class CodexReviewer implements Reviewer {
+  readonly #configuration: PluginConfiguration;
+  readonly #directory: string;
+  readonly #model: string | undefined;
+  readonly #sdkPath: string | undefined;
+  readonly #loadCodex: (input: { sdkPath?: string }) => Promise<CreateCodex>;
+  readonly #recordUsage: UsageRecorder | undefined;
+  readonly #project: string;
+  #codex: Promise<CreateCodex> | undefined;
+
+  constructor(input: {
+    configuration: PluginConfiguration;
+    directory: string;
+    loadCodex?: (input: { sdkPath?: string }) => Promise<CreateCodex>;
+    recordUsage?: UsageRecorder;
+    project?: string;
+  }) {
+    const agent = input.configuration.reviewer.agent;
+    if (agent.runtime !== "codex-sdk") {
+      throw new Error("The Codex SDK runtime is not configured.");
+    }
+    this.#configuration = input.configuration;
+    this.#directory = input.directory;
+    this.#model = agent.model;
+    this.#sdkPath = agent.sdkPath;
+    this.#loadCodex = input.loadCodex ?? loadCodex;
+    this.#recordUsage = input.recordUsage;
+    this.#project = input.project ?? "";
+  }
+
+  isReviewerSession(): boolean {
+    // Reviews run in Codex, never in an OpenCode session.
+    return false;
+  }
+
+  async review(input: ReviewRequest): Promise<ReviewVerdict> {
+    const startedAt = Date.now();
+    const usage: Usage = { inputTokens: null, outputTokens: null };
+    try {
+      const decision = await this.#review({ request: input, usage });
+      this.#record({ startedAt, usage, verdict: decision.verdict });
+      return decision;
+    } catch (error) {
+      this.#record({
+        startedAt,
+        usage,
+        verdict: error instanceof OversizeError ? "oversize" : "error",
+      });
+      throw error;
+    }
+  }
+
+  async #review(input: { request: ReviewRequest; usage: Usage }): Promise<ReviewVerdict> {
+    const { text, check } = agentReviewPrompt({
+      request: input.request,
+      configuration: this.#configuration,
+    });
+    const createCodex = await this.#createCodex();
+    const codex = createCodex({
+      config: {
+        // Auto mode: approval requests go to Codex's automatic reviewer.
+        approvals_reviewer: "auto_review",
+        developer_instructions: codexReviewerInstructions,
+        // The project's AGENTS.md is repository content, not the user's policy.
+        project_doc_max_bytes: 0,
+      },
+    });
+    const thread = codex.startThread({
+      ...(this.#model === undefined ? {} : { model: this.#model }),
+      workingDirectory: this.#directory,
+      skipGitRepoCheck: true,
+      sandboxMode: "read-only",
+      approvalPolicy: "on-request",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+    });
+    const abortController = new AbortController();
+    const timeout = setTimeout(
+      () => abortController.abort(),
+      this.#configuration.reviewer.timeoutMs,
+    );
+    try {
+      const turn = await thread.run(text, { signal: abortController.signal });
+      input.usage.inputTokens = turn.usage?.input_tokens ?? null;
+      input.usage.outputTokens = turn.usage?.output_tokens ?? null;
+      return parseVerdict(turn.finalResponse, check);
+    } catch (error) {
+      if (abortController.signal.aborted) throw new Error("Reviewer timed out.", { cause: error });
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      abortController.abort();
+    }
+  }
+
+  /** Loaded once; a failed load is retried on the next review. */
+  #createCodex(): Promise<CreateCodex> {
+    this.#codex ??= this.#loadCodex(
+      this.#sdkPath === undefined ? {} : { sdkPath: this.#sdkPath },
+    ).catch((error: unknown) => {
+      this.#codex = undefined;
+      throw error;
+    });
+    return this.#codex;
+  }
+
+  #record(input: {
+    startedAt: number;
+    usage: Usage;
+    verdict: ReviewVerdict["verdict"] | "error" | "oversize";
+  }): void {
+    if (this.#recordUsage === undefined) return;
+    try {
+      this.#recordUsage({
+        v: 1,
+        time: new Date(input.startedAt).toISOString(),
+        provider: "codex-sdk",
+        model: this.#model ?? "default",
+        project: this.#project,
+        inputTokens: input.usage.inputTokens,
+        outputTokens: input.usage.outputTokens,
+        latencyMs: Math.max(0, Date.now() - input.startedAt),
+        verdict: input.verdict,
+        // Codex reports no price, and a ChatGPT sign-in has none per call.
+        costUSD: null,
+      });
+    } catch {
+      // The usage log must never decide a review.
+    }
+  }
+}
+
+type Usage = { inputTokens: number | null; outputTokens: number | null };
+
+/** Imports the SDK's `Codex` class; see `importSdk`. */
+export async function loadCodex(input: { sdkPath?: string }): Promise<CreateCodex> {
+  const module = await importSdk({
+    packageName: sdkPackage,
+    option: "reviewer.agent.codexSdk.path",
+    ...input,
+    importInstalled: () => import("@openai/codex-sdk"),
+  });
+  const Codex = module.Codex;
+  if (typeof Codex !== "function") {
+    throw new Error(`The loaded ${sdkPackage} has no Codex class.`);
+  }
+  return (options) => new (Codex as new (options: CodexOptions) => CodexClient)(options);
+}

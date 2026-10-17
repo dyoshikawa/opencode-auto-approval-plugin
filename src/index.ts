@@ -1,6 +1,8 @@
 import { AgentReviewer } from "./agent-reviewer.js";
 import { AuditingReviewer, createAuditLogger } from "./audit.js";
 import { ChatReviewer } from "./chat-reviewer.js";
+import { ClaudeAgentReviewer } from "./claude-agent-reviewer.js";
+import { CodexReviewer } from "./codex-reviewer.js";
 import { DecisionReviewer } from "./decision-reviewer.js";
 import { OversizeFallbackReviewer } from "./fallback-reviewer.js";
 import type { Reviewer } from "./reviewer.js";
@@ -25,14 +27,24 @@ const defaultDependencies: PluginDependencies = {
 function backendReviewer(input: Parameters<PluginDependencies["createReviewer"]>[0]): Reviewer {
   const { reviewer } = input.configuration;
   // Reviews in an OpenCode session already count in `opencode stats`; the
-  // HTTP backends are logged for this package's `stats`.
+  // HTTP backends and the SDK runtimes are logged for this package's `stats`.
   const usage = reviewer.recordUsage
     ? {
         recordUsage: fileUsageRecorder({ path: usageLogPath() }),
         project: projectID({ directory: input.directory }),
       }
     : {};
-  const agent = () => new AgentReviewer(input);
+  const agent = (): Reviewer => {
+    const sdk = { configuration: input.configuration, directory: input.directory, ...usage };
+    switch (reviewer.agent.runtime) {
+      case "opencode":
+        return new AgentReviewer(input);
+      case "claude-agent-sdk":
+        return new ClaudeAgentReviewer(sdk);
+      case "codex-sdk":
+        return new CodexReviewer(sdk);
+    }
+  };
   const chat = () => new ChatReviewer({ configuration: input.configuration, ...usage });
   switch (reviewer.backend) {
     case "agent":

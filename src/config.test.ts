@@ -2,7 +2,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { parsePluginConfiguration } from "./config.js";
+import { parsePluginConfiguration, usesAgentReviewer } from "./config.js";
 
 function typeSafeOptions(options: Record<string, unknown> = {}) {
   return {
@@ -48,7 +48,7 @@ describe("parsePluginConfiguration", () => {
       conversation: { enabled: false, includeAssistant: false },
       reviewer: {
         backend: "agent",
-        agent: { maxInputBytes: 200_000 },
+        agent: { runtime: "opencode", maxInputBytes: 200_000 },
         timeoutMs: 30_000,
         recordUsage: true,
       },
@@ -73,12 +73,156 @@ describe("parsePluginConfiguration", () => {
       reviewer: {
         backend: "agent",
         agent: {
+          runtime: "opencode",
           model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
           maxInputBytes: 200_000,
         },
         timeoutMs: 12_000,
         recordUsage: true,
       },
+    });
+  });
+
+  describe("agent runtime", () => {
+    it("runs the agent reviewer on the Claude Agent SDK with a Claude model name", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              agent: {
+                runtime: "claude-agent-sdk",
+                model: "claude-sonnet-5-5",
+                claudeAgentSdk: { path: "/opt/sdk/node_modules/@anthropic-ai/claude-agent-sdk" },
+              },
+            },
+          },
+          env: {},
+        }).reviewer.agent,
+      ).toEqual({
+        runtime: "claude-agent-sdk",
+        model: "claude-sonnet-5-5",
+        sdkPath: "/opt/sdk/node_modules/@anthropic-ai/claude-agent-sdk",
+        maxInputBytes: 200_000,
+      });
+    });
+
+    it("leaves the Claude model and the SDK path unset by default", () => {
+      expect(
+        parsePluginConfiguration({
+          options: { reviewer: { agent: { runtime: "claude-agent-sdk" } } },
+          env: {},
+        }).reviewer.agent,
+      ).toEqual({ runtime: "claude-agent-sdk", maxInputBytes: 200_000 });
+    });
+
+    it("needs no OpenCode reviewer agent on the Claude Agent SDK", () => {
+      expect(
+        usesAgentReviewer(
+          parsePluginConfiguration({
+            options: { reviewer: { agent: { runtime: "claude-agent-sdk" } } },
+            env: {},
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        usesAgentReviewer(
+          parsePluginConfiguration({
+            options: {
+              reviewer: {
+                backend: "decision",
+                agent: { runtime: "claude-agent-sdk" },
+                decision: { provider: "typesafe", apiKey: "k", onOversize: "agent" },
+              },
+            },
+            env: {},
+          }),
+        ),
+      ).toBe(false);
+      expect(usesAgentReviewer(parsePluginConfiguration({ options: {}, env: {} }))).toBe(true);
+    });
+
+    it("refuses an OpenCode model reference on the Claude Agent SDK", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              agent: {
+                runtime: "claude-agent-sdk",
+                model: { providerID: "anthropic", modelID: "claude-sonnet-5-5" },
+              },
+            },
+          },
+          env: {},
+        }),
+      ).toThrow('with the "claude-agent-sdk" runtime, reviewer.agent.model must be a model name');
+    });
+
+    it("refuses a bare model name on the OpenCode runtime", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { agent: { model: "claude-sonnet-5-5" } } },
+          env: {},
+        }),
+      ).toThrow(
+        'with the "opencode" runtime, reviewer.agent.model must be { providerID, modelID }',
+      );
+    });
+
+    it("refuses Claude Agent SDK options on the OpenCode runtime", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { agent: { claudeAgentSdk: { path: "/opt/sdk" } } } },
+          env: {},
+        }),
+      ).toThrow('reviewer.agent.claudeAgentSdk needs reviewer.agent.runtime "claude-agent-sdk"');
+    });
+
+    it("runs the agent reviewer on the Codex SDK", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              agent: {
+                runtime: "codex-sdk",
+                model: "gpt-5.6-codex",
+                codexSdk: { path: "/opt/sdk/node_modules/@openai/codex-sdk" },
+              },
+            },
+          },
+          env: {},
+        }).reviewer.agent,
+      ).toEqual({
+        runtime: "codex-sdk",
+        model: "gpt-5.6-codex",
+        sdkPath: "/opt/sdk/node_modules/@openai/codex-sdk",
+        maxInputBytes: 200_000,
+      });
+    });
+
+    it("refuses another runtime's SDK options", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              agent: { runtime: "codex-sdk", claudeAgentSdk: { path: "/opt/sdk" } },
+            },
+          },
+          env: {},
+        }),
+      ).toThrow('reviewer.agent.claudeAgentSdk needs reviewer.agent.runtime "claude-agent-sdk"');
+    });
+
+    it("refuses a relative SDK path", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              agent: { runtime: "claude-agent-sdk", claudeAgentSdk: { path: "node_modules/sdk" } },
+            },
+          },
+          env: {},
+        }),
+      ).toThrow("Invalid auto-approval plugin options");
     });
   });
 
@@ -775,7 +919,11 @@ describe("parsePluginConfiguration", () => {
           options: { reviewer: { agent: {}, model: { providerID: "c", modelID: "d" } } },
           env: {},
         }).reviewer.agent,
-      ).toEqual({ model: { providerID: "c", modelID: "d" }, maxInputBytes: 200_000 });
+      ).toEqual({
+        runtime: "opencode",
+        model: { providerID: "c", modelID: "d" },
+        maxInputBytes: 200_000,
+      });
     });
 
     it.each(["agent", "decision"])(
@@ -831,7 +979,7 @@ describe("parsePluginConfiguration", () => {
         }).reviewer,
       ).toEqual({
         backend: "decision",
-        agent: { maxInputBytes: 200_000 },
+        agent: { runtime: "opencode", maxInputBytes: 200_000 },
         timeoutMs: 30_000,
         recordUsage: true,
         decision: {
