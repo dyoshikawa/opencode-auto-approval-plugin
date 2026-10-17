@@ -85,6 +85,16 @@ function askEvent(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function nativeAskEvent(overrides: Record<string, unknown> = {}) {
+  return askEvent({
+    sessionID: "session-1",
+    agent: "explore",
+    action: "shell",
+    source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    ...overrides,
+  });
+}
+
 describe("V2 plugin (opencode 2.x)", () => {
   it.each(["on-ask", "all-tools"])(
     "cancels stale %s approval even if the new prompt text repeats",
@@ -323,13 +333,198 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(event.effect).toBe("ask");
   });
 
-  it("does not register the permission hook in all-tools mode", async () => {
+  it("registers both native permission and tool hooks in all-tools mode", async () => {
     const { context, hooks } = createContext({ options: { mode: "all-tools" } });
     const { plugin } = createPlugin({ verdict: "allow" });
     await plugin.setup(context as never);
 
-    expect(hooks["permission.evaluate"]).toBeUndefined();
+    expect(hooks["permission.evaluate"]).toBeDefined();
     expect(hooks["tool.execute.before"]).toBeDefined();
+    expect(hooks["tool.execute.after"]).toBeDefined();
+  });
+
+  it.each(["shell", "read"])(
+    "satisfies native asks for an approved %s subagent tool call without a second review",
+    async (tool) => {
+      const { context, hooks } = createContext({ options: { mode: "all-tools" } });
+      const { plugin, review } = createPlugin({ verdict: "allow" });
+      await plugin.setup(context as never);
+
+      const call = {
+        sessionID: "session-1",
+        agent: "explore",
+        messageID: "msg-1",
+        id: "call-1",
+        tool,
+        input: tool === "shell" ? { command: "ls -la" } : { filePath: "README.md" },
+      };
+      const native = (action: string) =>
+        askEvent({
+          sessionID: call.sessionID,
+          agent: call.agent,
+          action,
+          effect: "ask",
+          source: { type: "tool", messageID: call.messageID, id: call.id },
+        });
+
+      const premature = native(tool);
+      await hooks["permission.evaluate"]?.(premature);
+      expect(premature.effect).toBe("ask");
+
+      await hooks["tool.execute.before"]?.(call);
+      const externalDirectory = native("external_directory");
+      const primary = native(tool);
+      await hooks["permission.evaluate"]?.(externalDirectory);
+      await hooks["permission.evaluate"]?.(primary);
+      expect(externalDirectory.effect).toBe("allow");
+      expect(primary.effect).toBe("allow");
+      expect(review).toHaveBeenCalledTimes(1);
+
+      const denied = native(tool);
+      denied.effect = "deny";
+      await hooks["permission.evaluate"]?.(denied);
+      expect(denied.effect).toBe("deny");
+
+      await hooks["tool.execute.after"]?.({ ...call, status: "completed", result: {} });
+      const after = native(tool);
+      await hooks["permission.evaluate"]?.(after);
+      expect(after.effect).toBe("ask");
+    },
+  );
+
+  it("scopes native grants to the exact session, agent, message and call id", async () => {
+    const { context, hooks } = createContext({ options: { mode: "all-tools" } });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+
+    await hooks["tool.execute.before"]?.({
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
+    });
+
+    const mismatches = [
+      nativeAskEvent({ sessionID: "session-other" }),
+      nativeAskEvent({ agent: "build" }),
+      nativeAskEvent({ source: { type: "tool", messageID: "msg-other", id: "call-1" } }),
+      nativeAskEvent({ source: { type: "tool", messageID: "msg-1", id: "call-other" } }),
+      nativeAskEvent({ source: undefined }),
+    ];
+    for (const event of mismatches) {
+      await hooks["permission.evaluate"]?.(event);
+      expect(event.effect).toBe("ask");
+    }
+    const matched = nativeAskEvent();
+    await hooks["permission.evaluate"]?.(matched);
+    expect(matched.effect).toBe("allow");
+  });
+
+  it("invalidates an approved native grant after a new user prompt", async () => {
+    const { context, hooks } = createContext({ options: { mode: "all-tools" } });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+
+    await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "read the file" } });
+    await hooks["tool.execute.before"]?.({
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
+    });
+
+    // A subsequent user request can revoke or change the authorization.
+    await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "stop" } });
+    const native = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
+    await hooks["permission.evaluate"]?.(native);
+    expect(native.effect).toBe("ask");
+  });
+
+  it.each(["deny", "escalate"] as const)(
+    "never grants native permissions after an AI %s verdict",
+    async (verdict) => {
+      const { context, hooks } = createContext({ options: { mode: "all-tools" } });
+      const { plugin } = createPlugin({ verdict });
+      await plugin.setup(context as never);
+
+      await expect(
+        hooks["tool.execute.before"]?.({
+          sessionID: "session-1",
+          agent: "explore",
+          messageID: "msg-1",
+          id: "call-1",
+          tool: "shell",
+          input: { command: "git push" },
+        }),
+      ).rejects.toThrow("Auto-approval reviewer");
+      const native = askEvent({
+        agent: "explore",
+        action: "shell",
+        source: { type: "tool", messageID: "msg-1", id: "call-1" },
+      });
+      await hooks["permission.evaluate"]?.(native);
+      expect(native.effect).toBe("ask");
+    },
+  );
+
+  it("clears the native grant on an errored tool call", async () => {
+    const { context, hooks } = createContext({ options: { mode: "all-tools" } });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+
+    const call = {
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
+    };
+    await hooks["tool.execute.before"]?.(call);
+    await hooks["tool.execute.after"]?.({ ...call, status: "error", error: new Error("oops") });
+    const native = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
+    await hooks["permission.evaluate"]?.(native);
+    expect(native.effect).toBe("ask");
+  });
+
+  it("expires orphaned grants if the after hook never fires", async () => {
+    const { context, hooks } = createContext({ options: { mode: "all-tools" } });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    const call = {
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
+    };
+    await hooks["tool.execute.before"]?.(call);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 5 * 60_000 + 1);
+      const native = askEvent({
+        agent: "explore",
+        action: "shell",
+        source: { type: "tool", messageID: "msg-1", id: "call-1" },
+      });
+      await hooks["permission.evaluate"]?.(native);
+      expect(native.effect).toBe("ask");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("blocks a tool call when all-tools review escalates", async () => {

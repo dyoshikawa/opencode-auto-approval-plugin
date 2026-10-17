@@ -24,6 +24,11 @@ const pluginID = "opencode-auto-approval-plugin";
 
 type Context = Plugin.Context;
 
+/** Identifies the invocation that already passed AI review. */
+function grantKey(call: { sessionID: string; messageID: string; id: string }): string {
+  return JSON.stringify([call.sessionID, call.messageID, call.id]);
+}
+
 /** V2 model references use `id`; the plugin configuration keeps V1's `modelID`. */
 function toModelRef(model: ModelReference): { providerID: string; id: string } {
   return { providerID: model.providerID, id: model.modelID };
@@ -167,8 +172,56 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         return;
       }
 
+      // V2 invokes execute.before before a tool's own native permission checks.
+      // Carry an AI "allow" only to permission assertions from that exact tool call.
+      // In particular, do not grant an entire session or agent permanent access.
+      const nativeGrants = new Map<
+        string,
+        { agent: string; revision: number | undefined; expiresAt: number }
+      >();
+      const grantLifetimeMs = 5 * 60_000;
+
+      await context.permission.hook("evaluate", (event) => {
+        if (event.effect !== "ask" || event.source?.type !== "tool" || isReviewer(event)) return;
+
+        const key = grantKey({
+          sessionID: event.sessionID,
+          messageID: event.source.messageID,
+          id: event.source.id,
+        });
+        const grant = nativeGrants.get(key);
+        if (!grant) return;
+        if (grant.expiresAt <= Date.now()) {
+          nativeGrants.delete(key);
+          return;
+        }
+        // A mismatched agent must not consume another agent's approval.
+        if (grant.agent !== event.agent) return;
+        if (grant.revision !== revisions.get(event.sessionID)) {
+          nativeGrants.delete(key);
+          return;
+        }
+
+        // Core has already rejected explicit native deny rules before this hook.
+        // The reviewer approval covers all native assertions within this call
+        // (e.g. external_directory followed by shell), without reviewing twice.
+        event.effect = "allow";
+        event.message = "Approved by auto-review for this tool call.";
+      });
+
+      await context.tool.hook("execute.after", (event) => {
+        nativeGrants.delete(grantKey(event));
+      });
+
       await context.tool.hook("execute.before", async (event) => {
         if (isReviewer(event)) return;
+
+        const key = grantKey(event);
+        nativeGrants.delete(key);
+        // If execution aborted before execute.after, old grants still expire.
+        for (const [pending, grant] of nativeGrants) {
+          if (grant.expiresAt <= Date.now()) nativeGrants.delete(pending);
+        }
 
         const revision = revisions.get(event.sessionID);
         await reviewToolCallOrThrow({
@@ -185,6 +238,11 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         if (revisions.get(event.sessionID) !== revision) {
           throw new Error("User intent changed during review; human review is required.");
         }
+        nativeGrants.set(key, {
+          agent: event.agent,
+          revision,
+          expiresAt: Date.now() + grantLifetimeMs,
+        });
       });
     },
   };
