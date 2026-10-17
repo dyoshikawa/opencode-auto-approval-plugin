@@ -35,23 +35,13 @@ export class AgentReviewer implements Reviewer {
   }
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const check = reviewCheck();
-    const text = reviewerPrompt({
+    const { text, check } = agentReviewPrompt({
       request: input,
-      instructions: this.#configuration.reviewer.instructions,
-      check,
+      configuration: this.#configuration,
     });
-    const { maxInputBytes } = this.#configuration.reviewer.agent;
-    const bytes = Buffer.byteLength(text, "utf8");
-    if (bytes > maxInputBytes) {
-      // An over-long prompt would be compacted or cut by the session, and the
-      // reviewer would judge a summary.
-      throw new OversizeError(
-        `Operation too large for the agent reviewer (${bytes.toLocaleString("en-US")} bytes, limit ${maxInputBytes.toLocaleString("en-US")}).`,
-      );
-    }
+    const agent = this.#configuration.reviewer.agent;
     const { sessionID } = await this.#client.create({
-      model: this.#configuration.reviewer.agent.model ?? input.model,
+      model: (agent.runtime === "opencode" ? agent.model : undefined) ?? input.model,
     });
     this.#reviewerSessionIDs.add(sessionID);
 
@@ -68,6 +58,31 @@ export class AgentReviewer implements Reviewer {
       this.#reviewerSessionIDs.delete(sessionID);
     }
   }
+}
+
+/**
+ * The agent reviewer's prompt and its review check, whichever runtime runs it.
+ * An over-long prompt would be compacted or cut by the session, and the
+ * reviewer would judge a summary, so it is refused here instead.
+ */
+export function agentReviewPrompt(input: {
+  request: ReviewRequest;
+  configuration: PluginConfiguration;
+}): { text: string; check: string } {
+  const check = reviewCheck();
+  const text = reviewerPrompt({
+    request: input.request,
+    instructions: input.configuration.reviewer.instructions,
+    check,
+  });
+  const { maxInputBytes } = input.configuration.reviewer.agent;
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > maxInputBytes) {
+    throw new OversizeError(
+      `Operation too large for the agent reviewer (${bytes.toLocaleString("en-US")} bytes, limit ${maxInputBytes.toLocaleString("en-US")}).`,
+    );
+  }
+  return { text, check };
 }
 
 async function withTimeout<T>(input: { operation: Promise<T>; timeoutMs: number }): Promise<T> {
