@@ -663,6 +663,117 @@ describe("parsePluginConfiguration", () => {
       ).toBe("http://localhost:11434/v1/chat/completions");
     });
 
+    it.each([
+      ["openai", "OPENAI_API_KEY", "https://api.openai.com/v1/chat/completions"],
+      ["anthropic", "ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/messages"],
+    ])("calls the %s API on its fixed host with %s", (provider, keyVariable, endpoint) => {
+      expect(
+        parsePluginConfiguration({
+          options: { reviewer: { backend: "chat", chat: { provider, model: "m" } } },
+          env: { [keyVariable]: " vendor-key ", AUTO_APPROVAL_CHAT_API_KEY: "generic-key" },
+        }).reviewer.chat,
+      ).toEqual({
+        provider,
+        apiKey: "vendor-key",
+        endpoint,
+        model: "m",
+        maxInputBytes: 200_000,
+      });
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: { backend: "chat", chat: { provider, apiKey: "option-key", model: "m" } },
+          },
+          env: { [keyVariable]: "vendor-key" },
+        }).reviewer.chat?.apiKey,
+      ).toBe("option-key");
+    });
+
+    it("never sends a vendor key anywhere but the vendor's own host", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "chat",
+              chat: {
+                provider: "anthropic",
+                apiKey: "k",
+                baseURL: "https://attacker.example/v1",
+                model: "m",
+              },
+            },
+          },
+          env: {},
+        }),
+      ).toThrow("reviewer.chat.baseURL is not used with the anthropic provider");
+      expect(
+        parsePluginConfiguration({
+          options: { reviewer: { backend: "chat", chat: { provider: "openai", model: "m" } } },
+          env: { OPENAI_API_KEY: "k", AUTO_APPROVAL_CHAT_BASE_URL: "https://attacker.example/v1" },
+        }).reviewer.chat?.endpoint,
+      ).toBe("https://api.openai.com/v1/chat/completions");
+    });
+
+    it("treats a blank baseURL as unset for a vendor provider", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "chat",
+              chat: { provider: "anthropic", baseURL: " ", model: "m" },
+            },
+          },
+          env: { ANTHROPIC_API_KEY: "k" },
+        }).reviewer.chat?.endpoint,
+      ).toBe("https://api.anthropic.com/v1/messages");
+    });
+
+    it("refuses an unknown provider", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { backend: "chat", chat: { provider: "azure", model: "m" } } },
+          env: { AUTO_APPROVAL_CHAT_API_KEY: "k" },
+        }),
+      ).toThrow("Invalid auto-approval plugin options: reviewer.chat");
+    });
+
+    it("resolves a vendor provider for the decision backend's chat fallback", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "decision",
+              decision: { provider: "typesafe", apiKey: "t", onOversize: "chat" },
+              chat: { provider: "anthropic", model: "claude-haiku-5-5" },
+            },
+          },
+          env: { ANTHROPIC_API_KEY: "ant-key" },
+        }).reviewer.chat,
+      ).toMatchObject({
+        provider: "anthropic",
+        apiKey: "ant-key",
+        endpoint: "https://api.anthropic.com/v1/messages",
+      });
+    });
+
+    it("names the vendor's key variable when the key is missing", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { backend: "chat", chat: { provider: "anthropic", model: "m" } } },
+          env: { AUTO_APPROVAL_CHAT_API_KEY: "generic-key" },
+        }),
+      ).toThrow("the anthropic provider needs reviewer.chat.apiKey or ANTHROPIC_API_KEY");
+    });
+
+    it("keeps OpenAI-compatible endpoints the default provider", () => {
+      expect(
+        parsePluginConfiguration({
+          options: { reviewer: { backend: "chat", chat: { model: "m" } } },
+          env: { AUTO_APPROVAL_CHAT_API_KEY: "k", OPENAI_API_KEY: "openai-key" },
+        }).reviewer.chat,
+      ).toMatchObject({ provider: "openai-compatible", apiKey: "k" });
+    });
+
     it("never sends an option key to the environment's base URL, nor the reverse", () => {
       expect(
         parsePluginConfiguration({

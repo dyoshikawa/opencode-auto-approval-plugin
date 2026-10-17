@@ -76,9 +76,18 @@ export type LongContextConfiguration = {
   minAllowProbability: number;
 };
 
+/**
+ * `openai-compatible` posts to any Chat Completions endpoint; `openai` and
+ * `anthropic` call the vendor's own API on a fixed host with its own key.
+ */
+const chatProviders = ["openai-compatible", "openai", "anthropic"] as const;
+
+export type ChatProvider = (typeof chatProviders)[number];
+
 export type ChatConfiguration = {
+  provider: ChatProvider;
   apiKey: string;
-  /** Full URL of the Chat Completions endpoint. */
+  /** Full URL of the Chat Completions endpoint, or Anthropic's Messages endpoint. */
   endpoint: string;
   model: string;
   /** A whole prompt (instructions and operation) longer than this, in UTF-8 bytes, is not sent. */
@@ -208,6 +217,7 @@ const decisionOptionsShape = {
 };
 
 const chatOptionsSchema = z.object({
+  provider: z.optional(z.enum(chatProviders)),
   apiKey: z.optional(z.string()),
   baseURL: z.optional(z.string()),
   model: z.string().check(z.minLength(1)),
@@ -641,10 +651,23 @@ function cloudflareConfiguration(input: {
 }
 
 /**
- * `reviewer.chat`: an OpenAI-compatible Chat Completions API. As with
- * TypeSafe, the key and the base URL come from the same place — the options,
- * or AUTO_APPROVAL_CHAT_API_KEY with AUTO_APPROVAL_CHAT_BASE_URL — so one
- * source cannot send a key supplied by another to its own server.
+ * The vendor APIs: a fixed endpoint, so their key can only ever reach that
+ * host, and the vendor's usual key variable.
+ */
+const vendorChatAPIs = {
+  openai: { endpoint: "https://api.openai.com/v1/chat/completions", keyVariable: "OPENAI_API_KEY" },
+  anthropic: {
+    endpoint: "https://api.anthropic.com/v1/messages",
+    keyVariable: "ANTHROPIC_API_KEY",
+  },
+} as const;
+
+/**
+ * `reviewer.chat`: an OpenAI-compatible Chat Completions API, or the OpenAI or
+ * Anthropic API itself. As with TypeSafe, the key and the base URL of an
+ * OpenAI-compatible endpoint come from the same place — the options, or
+ * AUTO_APPROVAL_CHAT_API_KEY with AUTO_APPROVAL_CHAT_BASE_URL — so one source
+ * cannot send a key supplied by another to its own server.
  */
 function chatConfiguration(input: { options: unknown; env: Environment }): ChatConfiguration {
   if (input.options === undefined) {
@@ -657,6 +680,10 @@ function chatConfiguration(input: { options: unknown; env: Environment }): ChatC
     value: input.options,
     prefix: "reviewer.chat",
   });
+  const provider = options.provider ?? "openai-compatible";
+  if (provider !== "openai-compatible") {
+    return vendorChatConfiguration({ provider, options, env: input.env });
+  }
   const optionKey = nonEmpty(options.apiKey?.trim());
   const optionBaseURL = nonEmpty(options.baseURL?.trim());
   if (optionKey === undefined && optionBaseURL !== undefined) {
@@ -677,10 +704,38 @@ function chatConfiguration(input: { options: unknown; env: Environment }): ChatC
     );
   }
   return {
+    provider,
     apiKey: source.apiKey,
     endpoint: chatEndpoint(source.baseURL ?? defaultChatBaseURL),
     model: options.model,
     maxInputBytes: options.maxInputBytes ?? defaultMaxLLMInputBytes,
+  };
+}
+
+function vendorChatConfiguration(input: {
+  provider: Exclude<ChatProvider, "openai-compatible">;
+  options: z.infer<typeof chatOptionsSchema>;
+  env: Environment;
+}): ChatConfiguration {
+  const { endpoint, keyVariable } = vendorChatAPIs[input.provider];
+  // Blank counts as unset, as for openai-compatible: `{env:NAME}` of an unset variable is "".
+  if (nonEmpty(input.options.baseURL?.trim()) !== undefined) {
+    throw new Error(
+      `Invalid auto-approval plugin options: reviewer.chat.baseURL is not used with the ${input.provider} provider; use provider "openai-compatible" for another endpoint.`,
+    );
+  }
+  const apiKey = nonEmpty(input.options.apiKey?.trim()) ?? nonEmpty(input.env[keyVariable]?.trim());
+  if (apiKey === undefined) {
+    throw new Error(
+      `Invalid auto-approval plugin options: the ${input.provider} provider needs reviewer.chat.apiKey or ${keyVariable}.`,
+    );
+  }
+  return {
+    provider: input.provider,
+    apiKey,
+    endpoint,
+    model: input.options.model,
+    maxInputBytes: input.options.maxInputBytes ?? defaultMaxLLMInputBytes,
   };
 }
 

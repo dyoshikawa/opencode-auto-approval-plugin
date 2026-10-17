@@ -15,8 +15,8 @@ import {
 import type { UsageRecorder } from "./usage.js";
 
 /**
- * Reviews an operation in one call to an OpenAI-compatible Chat Completions
- * API: the same prompt and JSON verdict as the agent reviewer, but no session
+ * Reviews an operation in one call to a Chat Completions API (OpenAI or a
+ * compatible server) or Anthropic's Messages API: the same prompt and JSON verdict as the agent reviewer, but no session
  * and no tools, so it judges the operation data alone. It suits a run with no
  * human to ask (CI), and operations too large for a decision model.
  */
@@ -27,6 +27,30 @@ const systemPrompt =
 const completionSchema = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.nullable(z.string()) }) })),
 });
+
+/** The Messages API response; usage is read leniently, as for Chat Completions. */
+const messageSchema = z.object({
+  content: z.array(z.object({ type: z.string(), text: z.optional(z.string()) })),
+  stop_reason: z.optional(z.nullable(z.string())),
+  usage: z.optional(
+    z.object({
+      input_tokens: z.optional(z.nullable(z.number())),
+      output_tokens: z.optional(z.nullable(z.number())),
+      cache_creation_input_tokens: z.optional(z.nullable(z.number())),
+      cache_read_input_tokens: z.optional(z.nullable(z.number())),
+    }),
+  ),
+});
+
+const anthropicVersion = "2023-06-01";
+
+/**
+ * Room for the verdict and, on models that always think, the thinking that
+ * precedes it; a non-streaming request this size stays within SDK timeouts.
+ */
+const anthropicMaxTokens = 16_000;
+
+type Tokens = { input: number | null; output: number | null };
 
 /** Read on its own and leniently: token counts must never decide a review. */
 const usageSchema = z.object({
@@ -106,6 +130,16 @@ export class ChatReviewer implements Reviewer {
       );
     }
 
+    const content =
+      this.#configuration.provider === "anthropic"
+        ? await this.#messages({ prompt, tokens: input.tokens })
+        : await this.#chatCompletions({ prompt, tokens: input.tokens });
+    return parseVerdict(content, check);
+  }
+
+  /** One Chat Completions call (OpenAI or a compatible server); resolves with the reply text. */
+  async #chatCompletions(input: { prompt: string; tokens: Tokens }): Promise<string> {
+    const { model } = this.#configuration;
     const result = await postJSON({
       fetch: this.#fetch,
       url: this.#configuration.endpoint,
@@ -114,26 +148,13 @@ export class ChatReviewer implements Reviewer {
         model,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: prompt },
+          { role: "user", content: input.prompt },
         ],
       },
       timeoutMs: this.#timeoutMs,
       label: "Chat model",
     });
-    if (!result.ok) {
-      // OpenAI names an over-long prompt `context_length_exceeded`; compatible
-      // servers word it as a context length, size or window, or answer 413.
-      if (
-        result.status === 413 ||
-        (result.status === 400 &&
-          /context_length_exceeded|maximum context length|exceed_context_size|context size|context window/i.test(
-            result.text,
-          ))
-      ) {
-        throw new OversizeError(`Operation too large for ${model} (refused by the API).`);
-      }
-      throw new Error(`Chat model request failed with HTTP ${result.status}.`);
-    }
+    if (!result.ok) throw this.#requestError(result);
 
     const completion = z.safeParse(completionSchema, result.body);
     if (!completion.success) {
@@ -148,14 +169,88 @@ export class ChatReviewer implements Reviewer {
     const cached = tokenCount(counts?.prompt_tokens_details?.cached_tokens) ?? 0;
     assertReadWhole({
       model,
-      prompt: `${systemPrompt}\n${prompt}`,
+      prompt: `${systemPrompt}\n${input.prompt}`,
       reportedTokens: input.tokens.input === null ? null : Math.max(input.tokens.input, cached),
     });
     const content = completion.data.choices[0]?.message.content;
     if (!content) {
       throw new Error("Chat model response had no content.");
     }
-    return parseVerdict(content, check);
+    return content;
+  }
+
+  /** One call to Anthropic's Messages API; resolves with the reply text. */
+  async #messages(input: { prompt: string; tokens: Tokens }): Promise<string> {
+    const { model } = this.#configuration;
+    const result = await postJSON({
+      fetch: this.#fetch,
+      url: this.#configuration.endpoint,
+      apiKey: this.#configuration.apiKey,
+      auth: "x-api-key",
+      headers: { "anthropic-version": anthropicVersion },
+      body: {
+        model,
+        max_tokens: anthropicMaxTokens,
+        system: systemPrompt,
+        messages: [{ role: "user", content: input.prompt }],
+      },
+      timeoutMs: this.#timeoutMs,
+      label: "Chat model",
+    });
+    if (!result.ok) throw this.#requestError(result);
+
+    const message = z.safeParse(messageSchema, result.body);
+    if (!message.success) {
+      throw new Error("Chat model response did not match the Messages API schema.");
+    }
+    const usage = message.data.usage;
+    const cacheTokens =
+      (tokenCount(usage?.cache_creation_input_tokens) ?? 0) +
+      (tokenCount(usage?.cache_read_input_tokens) ?? 0);
+    const inputTokens = tokenCount(usage?.input_tokens);
+    // `input_tokens` leaves out the cached part of the prompt, which was read too.
+    input.tokens.input = inputTokens === null ? null : inputTokens + cacheTokens;
+    input.tokens.output = tokenCount(usage?.output_tokens);
+    assertReadWhole({
+      model,
+      prompt: `${systemPrompt}\n${input.prompt}`,
+      reportedTokens: input.tokens.input,
+    });
+    // Only a finished reply holds a verdict: a refusal carries none, and a
+    // reply cut short — or stopped for a reason added later — cannot be trusted.
+    const stopReason = message.data.stop_reason;
+    if (stopReason === "model_context_window_exceeded") {
+      throw new OversizeError(`Operation too large for ${model} (out of context window).`);
+    }
+    if (stopReason !== "end_turn" && stopReason !== "stop_sequence") {
+      throw new Error(`Chat model reply stopped early (${String(stopReason)}).`);
+    }
+    const content = message.data.content
+      .flatMap((block) => (block.type === "text" && block.text !== undefined ? [block.text] : []))
+      .join("\n");
+    if (!content) {
+      throw new Error("Chat model response had no content.");
+    }
+    return content;
+  }
+
+  /** An over-long prompt is too large; any other refusal is reported by status only. */
+  #requestError(result: { status: number; text: string }): Error {
+    // OpenAI names an over-long prompt `context_length_exceeded`, Anthropic
+    // "prompt is too long"; compatible servers word it as a context length,
+    // size or window, or answer 413.
+    if (
+      result.status === 413 ||
+      (result.status === 400 &&
+        /context_length_exceeded|maximum context length|exceed_context_size|context size|context window|prompt is too long/i.test(
+          result.text,
+        ))
+    ) {
+      return new OversizeError(
+        `Operation too large for ${this.#configuration.model} (refused by the API).`,
+      );
+    }
+    return new Error(`Chat model request failed with HTTP ${result.status}.`);
   }
 
   #record(input: {
