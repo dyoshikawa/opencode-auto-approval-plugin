@@ -216,12 +216,14 @@ export class ChatReviewer implements Reviewer {
       prompt: `${systemPrompt}\n${input.prompt}`,
       reportedTokens: input.tokens.input,
     });
-    // A refusal carries no verdict, and a cut reply cannot be trusted.
-    if (message.data.stop_reason === "refusal") {
-      throw new Error("Chat model refused to review the operation.");
+    // Only a finished reply holds a verdict: a refusal carries none, and a
+    // reply cut short — or stopped for a reason added later — cannot be trusted.
+    const stopReason = message.data.stop_reason;
+    if (stopReason === "model_context_window_exceeded") {
+      throw new OversizeError(`Operation too large for ${model} (out of context window).`);
     }
-    if (message.data.stop_reason === "max_tokens") {
-      throw new Error("Chat model reply was cut at max_tokens.");
+    if (stopReason !== "end_turn" && stopReason !== "stop_sequence") {
+      throw new Error(`Chat model reply stopped early (${String(stopReason)}).`);
     }
     const content = message.data.content
       .flatMap((block) => (block.type === "text" && block.text !== undefined ? [block.text] : []))

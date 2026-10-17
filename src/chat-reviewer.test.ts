@@ -315,15 +315,26 @@ describe("ChatReviewer with the anthropic provider", () => {
     ]);
   });
 
-  it.each([
-    ["refusal", "refused to review"],
-    ["max_tokens", "cut at max_tokens"],
-  ])("fails a reply that stopped with %s", async (stopReason, error) => {
+  it.each(["refusal", "max_tokens", "pause_turn"])(
+    "fails a reply that stopped with %s",
+    async (stopReason) => {
+      const { reviewer } = anthropicReviewer({
+        response: (prompt) => anthropicMessage({ prompt, stopReason }),
+      });
+
+      await expect(reviewer.review(request)).rejects.toThrow(
+        `Chat model reply stopped early (${stopReason}).`,
+      );
+    },
+  );
+
+  it("treats a reply out of context window as too large", async () => {
     const { reviewer } = anthropicReviewer({
-      response: (prompt) => anthropicMessage({ prompt, stopReason }),
+      response: (prompt) =>
+        anthropicMessage({ prompt, stopReason: "model_context_window_exceeded" }),
     });
 
-    await expect(reviewer.review(request)).rejects.toThrow(error);
+    await expect(reviewer.review(request)).rejects.toBeInstanceOf(OversizeError);
   });
 
   it("treats prompt is too long as oversize", async () => {
@@ -365,5 +376,26 @@ describe("ChatReviewer with the anthropic provider", () => {
     await expect(reviewer.review(request)).rejects.toThrow(
       /^Chat model request failed with HTTP 529\.$/,
     );
+  });
+});
+
+describe("ChatReviewer with the openai provider", () => {
+  it("posts to api.openai.com with the key as a bearer token", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+      const prompt: string = JSON.parse(String(init?.body)).messages[1].content;
+      return completion({ content: echoCheck('{"verdict":"deny","reason":"no"}', prompt) });
+    });
+    const reviewer = new ChatReviewer({
+      configuration: parsePluginConfiguration({
+        options: { reviewer: { backend: "chat", chat: { provider: "openai", model: "gpt-5.6" } } },
+        env: { OPENAI_API_KEY: "sk-openai" },
+      }),
+      fetch,
+    });
+
+    await expect(reviewer.review(request)).resolves.toMatchObject({ verdict: "deny" });
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.openai.com/v1/chat/completions");
+    expect(init).toMatchObject({ headers: { authorization: "Bearer sk-openai" } });
   });
 });

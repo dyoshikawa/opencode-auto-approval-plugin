@@ -714,6 +714,48 @@ describe("parsePluginConfiguration", () => {
       ).toBe("https://api.openai.com/v1/chat/completions");
     });
 
+    it("treats a blank baseURL as unset for a vendor provider", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "chat",
+              chat: { provider: "anthropic", baseURL: " ", model: "m" },
+            },
+          },
+          env: { ANTHROPIC_API_KEY: "k" },
+        }).reviewer.chat?.endpoint,
+      ).toBe("https://api.anthropic.com/v1/messages");
+    });
+
+    it("refuses an unknown provider", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { backend: "chat", chat: { provider: "azure", model: "m" } } },
+          env: { AUTO_APPROVAL_CHAT_API_KEY: "k" },
+        }),
+      ).toThrow("Invalid auto-approval plugin options: reviewer.chat");
+    });
+
+    it("resolves a vendor provider for the decision backend's chat fallback", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "decision",
+              decision: { provider: "typesafe", apiKey: "t", onOversize: "chat" },
+              chat: { provider: "anthropic", model: "claude-haiku-5-5" },
+            },
+          },
+          env: { ANTHROPIC_API_KEY: "ant-key" },
+        }).reviewer.chat,
+      ).toMatchObject({
+        provider: "anthropic",
+        apiKey: "ant-key",
+        endpoint: "https://api.anthropic.com/v1/messages",
+      });
+    });
+
     it("names the vendor's key variable when the key is missing", () => {
       expect(() =>
         parsePluginConfiguration({

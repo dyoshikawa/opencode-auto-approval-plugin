@@ -718,7 +718,8 @@ function vendorChatConfiguration(input: {
   env: Environment;
 }): ChatConfiguration {
   const { endpoint, keyVariable } = vendorChatAPIs[input.provider];
-  if (input.options.baseURL !== undefined) {
+  // Blank counts as unset, as for openai-compatible: `{env:NAME}` of an unset variable is "".
+  if (nonEmpty(input.options.baseURL?.trim()) !== undefined) {
     throw new Error(
       `Invalid auto-approval plugin options: reviewer.chat.baseURL is not used with the ${input.provider} provider; use provider "openai-compatible" for another endpoint.`,
     );
