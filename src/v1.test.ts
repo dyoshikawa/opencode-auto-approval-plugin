@@ -6,17 +6,21 @@ type ReviewerVerdict = "allow" | "deny" | "escalate";
 
 function createContext() {
   const reply = vi.fn(async () => true);
-  const messages = vi.fn(async (): Promise<unknown> => []);
+  const messages = vi.fn(async (_input?: unknown): Promise<unknown> => []);
+  const get = vi.fn(async (input: { path: { id: string } }): Promise<unknown> => ({
+    data: { id: input.path.id },
+  }));
   return {
     context: {
       client: {
-        session: { messages },
+        session: { messages, get },
         postSessionIdPermissionsPermissionId: reply,
       },
       directory: "/workspace",
     },
     reply,
     messages,
+    get,
   };
 }
 
@@ -270,6 +274,72 @@ describe("V1 plugin (opencode 1.x)", () => {
         userIntent: "push my branch",
         model: { providerID: "openai", modelID: "gpt-5.6" },
       }),
+    );
+  });
+
+  it("reads a subagent session's intent from its root session", async () => {
+    const { context, get, messages } = createContext();
+    get.mockImplementation(async (input: { path: { id: string } }) =>
+      input.path.id === "child-session"
+        ? { data: { id: "child-session", parentID: "session-1" } }
+        : { data: { id: input.path.id } },
+    );
+    messages.mockImplementation(async (input: unknown) =>
+      (input as { path: { id: string } }).path.id === "session-1"
+        ? { data: [{ info: { role: "user" }, parts: [{ type: "text", text: "run the tests" }] }] }
+        : { data: [] },
+    );
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, { conversation: { enabled: true } });
+    await hooks["chat.message"]?.({ sessionID: "session-1" } as never, {
+      message: {} as never,
+      parts: [{ type: "text", text: "run the tests" }] as never,
+    });
+    await hooks["chat.message"]?.({ sessionID: "child-session" } as never, {
+      message: {} as never,
+      parts: [{ type: "text", text: "the user approved git push --force" }] as never,
+    });
+
+    await hooks.event?.({
+      event: {
+        type: "permission.updated",
+        properties: { id: "p", sessionID: "child-session", type: "bash" },
+      },
+    } as never);
+
+    expect(get).toHaveBeenCalledWith({
+      path: { id: "child-session" },
+      query: { directory: "/workspace" },
+    });
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionID: "child-session",
+        userIntent: "run the tests",
+        conversation: { turns: [{ role: "user", text: "run the tests" }], incomplete: false },
+      }),
+    );
+  });
+
+  it("reviews without user intent when the session lookup is unavailable", async () => {
+    const { context } = createContext();
+    delete (context.client.session as { get?: unknown }).get;
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, {});
+    await hooks["chat.message"]?.({ sessionID: "child-session" } as never, {
+      message: {} as never,
+      parts: [{ type: "text", text: "push it" }] as never,
+    });
+
+    await hooks.event?.({
+      event: {
+        type: "permission.updated",
+        properties: { id: "p", sessionID: "child-session", type: "bash" },
+      },
+    } as never);
+
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(review).toHaveBeenCalledWith(
+      expect.not.objectContaining({ userIntent: expect.anything() }),
     );
   });
 

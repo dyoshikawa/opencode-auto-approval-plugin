@@ -34,9 +34,6 @@ jobs:
         with:
           experimental: true
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
       - name: Verify release source
         run: |
           set -euo pipefail
@@ -58,6 +55,11 @@ jobs:
             echo "::error::Release commit $release_commit is not in the current main history"
             exit 1
           fi
+
+      # Lifecycle scripts stay off: this job holds an npm publishing token
+      # (id-token: write), and nothing here needs a dependency's install script.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Run cicheck
         run: pnpm cicheck
