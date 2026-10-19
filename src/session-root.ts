@@ -59,6 +59,9 @@ export function createRootSessionResolver(
         message: "Session lookup timed out.",
       });
     } catch {
+      // A lookup that never settles must not be shared forever: the next
+      // review starts a fresh one.
+      if (pending.get(sessionID) === lookup) pending.delete(sessionID);
       return undefined;
     }
   };
@@ -113,7 +116,8 @@ export function createIntentTracker<Context>(input: {
     begin: async (sessionID) => {
       const start = sequence;
       const root = await input.rootSession(sessionID);
-      // Unknown root: the session's own prompts still cancel, but carry no intent.
+      // Unknown root: the review carries no intent, so only the session's own
+      // prompts cancel it (a prompt in the unknown root cannot be matched).
       const intentSession = root ?? sessionID;
       return {
         changed: () => (latestPrompt.get(intentSession) ?? 0) > start,

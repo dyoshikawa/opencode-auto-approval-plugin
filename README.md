@@ -596,11 +596,12 @@ prompt injection.
 Subagent sessions (started by the `task` tool) are prompted by the parent agent, not by you, so
 their prompts never count as user intent. A review of an operation in a subagent session follows
 the session's `parentID` chain to the root session and uses that session's latest prompt and, when
-enabled, its conversation; a new prompt there also cancels the subagent's pending result. The
-chain is looked up once per session and cached; that lookup has its own 1-second timeout, so a
-session's first review can wait up to 2 seconds with history enabled. If the chain cannot be read
-in time, the operation is reviewed without any user intent (and an enabled conversation is marked
-incomplete).
+enabled, its conversation; a new prompt there also cancels the subagent's pending result. A
+resolved chain is cached; a failed or timed-out lookup is retried on the next review. The lookup
+has its own 1-second timeout, so a review can wait up to 2 seconds with history enabled. If the
+chain cannot be read in time, the operation is reviewed without any user intent (an enabled
+conversation is marked incomplete), and only a new prompt in the subagent session itself cancels
+its pending result.
 
 Every backend receives the same operation data, and the retained conversation counts toward each
 backend's size limit: an operation that no longer fits is handled like any other oversized one

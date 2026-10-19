@@ -77,6 +77,20 @@ describe("createRootSessionResolver", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(pending).resolves.toBeUndefined();
   });
+
+  it("retries a lookup that timed out on the next call", async () => {
+    vi.useFakeTimers();
+    const parentOf = vi
+      .fn<(sessionID: string) => Promise<string | undefined>>()
+      .mockImplementationOnce(() => new Promise<string | undefined>(() => {}))
+      .mockResolvedValueOnce(undefined);
+    const resolve = createRootSessionResolver(parentOf);
+    const first = resolve("root");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(first).resolves.toBeUndefined();
+    await expect(resolve("root")).resolves.toBe("root");
+    expect(parentOf).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("parentIdentifier", () => {
@@ -115,6 +129,15 @@ describe("createIntentTracker", () => {
     expect(intent.changed()).toBe(false);
     intents.prompted("root");
     expect(intent.changed()).toBe(true);
+  });
+
+  it("ignores prompts before the review began and prompts of unrelated sessions", async () => {
+    const intents = tracker({ child: "root" });
+    intents.prompted("root");
+    const intent = await intents.begin("child");
+    expect(intent.changed()).toBe(false);
+    intents.prompted("other");
+    expect(intent.changed()).toBe(false);
   });
 
   it("counts a root prompt that arrives while the root is still being looked up", async () => {
