@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createIntentTracker,
   createRootSessionResolver,
   MAX_SESSION_DEPTH,
-  unknownRootContext,
+  parentIdentifier,
 } from "./session-root.js";
 
 function lookup(parents: Record<string, string | undefined>) {
@@ -29,6 +30,16 @@ describe("createRootSessionResolver", () => {
     await expect(resolve("grandchild")).resolves.toBe("root");
     expect(parentOf).toHaveBeenCalledTimes(3);
     await expect(resolve("child")).resolves.toBe("root");
+    await expect(resolve("grandchild")).resolves.toBe("root");
+    expect(parentOf).toHaveBeenCalledTimes(3);
+  });
+
+  it("shares one walk between parallel lookups and caches a walk that meets a known root", async () => {
+    const parentOf = lookup({ root: undefined, child: "root", grandchild: "child" });
+    const resolve = createRootSessionResolver(parentOf);
+    await Promise.all([resolve("child"), resolve("child")]);
+    expect(parentOf).toHaveBeenCalledTimes(2);
+    await expect(resolve("grandchild")).resolves.toBe("root");
     await expect(resolve("grandchild")).resolves.toBe("root");
     expect(parentOf).toHaveBeenCalledTimes(3);
   });
@@ -68,9 +79,70 @@ describe("createRootSessionResolver", () => {
   });
 });
 
-describe("unknownRootContext", () => {
-  it("carries no intent and marks an enabled conversation incomplete", () => {
-    expect(unknownRootContext(false)).toEqual({});
-    expect(unknownRootContext(true)).toEqual({ conversation: { turns: [], incomplete: true } });
+describe("parentIdentifier", () => {
+  it("reads parentID from a bare or {data}-wrapped session", () => {
+    expect(parentIdentifier({ id: "child", parentID: "root" })).toBe("root");
+    expect(parentIdentifier({ data: { id: "child", parentID: "root" } })).toBe("root");
+    expect(parentIdentifier({ id: "root" })).toBeUndefined();
+    expect(parentIdentifier({ id: "root", parentID: null })).toBeUndefined();
+  });
+
+  it("refuses anything that is not a session, so the lookup fails closed", () => {
+    expect(() => parentIdentifier({})).toThrow();
+    expect(() => parentIdentifier({ error: { message: "not found" } })).toThrow();
+    expect(() => parentIdentifier({ id: "child", parentID: 1 })).toThrow();
+  });
+});
+
+function tracker(roots: Record<string, string | undefined>) {
+  return createIntentTracker({
+    rootSession: async (sessionID) => roots[sessionID],
+    conversation: async (root) => ({ userIntent: `intent of ${root}` }),
+    conversationEnabled: true,
+  });
+}
+
+describe("createIntentTracker", () => {
+  it("hands a child session's review the root session's context", async () => {
+    const intent = await tracker({ child: "root" }).begin("child");
+    await expect(intent.context()).resolves.toEqual({ userIntent: "intent of root" });
+  });
+
+  it("marks a review stale when the root session is prompted, but not for the child's own prompts", async () => {
+    const intents = tracker({ child: "root" });
+    const intent = await intents.begin("child");
+    intents.prompted("child");
+    expect(intent.changed()).toBe(false);
+    intents.prompted("root");
+    expect(intent.changed()).toBe(true);
+  });
+
+  it("counts a root prompt that arrives while the root is still being looked up", async () => {
+    const root = Promise.withResolvers<string | undefined>();
+    const intents = createIntentTracker({
+      rootSession: () => root.promise,
+      conversation: async () => ({}),
+      conversationEnabled: false,
+    });
+    const pending = intents.begin("child");
+    intents.prompted("root");
+    root.resolve("root");
+    expect((await pending).changed()).toBe(true);
+  });
+
+  it("carries no intent when the root is unknown", async () => {
+    const intents = tracker({});
+    const intent = await intents.begin("child");
+    await expect(intent.context()).resolves.toEqual({
+      conversation: { turns: [], incomplete: true },
+    });
+    intents.prompted("child");
+    expect(intent.changed()).toBe(true);
+    const disabled = createIntentTracker({
+      rootSession: async () => undefined,
+      conversation: async () => ({}),
+      conversationEnabled: false,
+    });
+    await expect((await disabled.begin("child")).context()).resolves.toEqual({});
   });
 });

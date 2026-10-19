@@ -286,6 +286,29 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(event.effect).toBe("ask");
   });
 
+  it("blocks a subagent's tool call in all-tools mode when the root session is prompted during review", async () => {
+    const { context, hooks, session } = createContext({ options: { mode: "all-tools" } });
+    session.get.mockImplementation(async (input?: { sessionID: string }) =>
+      input?.sessionID === "child-session"
+        ? ({ id: "child-session", parentID: "session-1" } as never)
+        : { id: "session-1", model: { providerID: "openai", id: "gpt-5.6" } },
+    );
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "run the tests" } });
+    review.mockImplementationOnce(async () => {
+      await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "stop" } });
+      return { verdict: "allow", reason: "stale" };
+    });
+
+    await expect(
+      hooks["tool.execute.before"]?.({ sessionID: "child-session", tool: "bash", input: {} }),
+    ).rejects.toThrow("User intent changed");
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionID: "child-session", userIntent: "run the tests" }),
+    );
+  });
+
   it("reviews a session without user intent when its root cannot be resolved", async () => {
     const { context, hooks, session } = createContext();
     session.get.mockRejectedValue(new Error("gone"));

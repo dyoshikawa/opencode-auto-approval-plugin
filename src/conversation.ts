@@ -110,6 +110,25 @@ function humanTurn(input: {
   return text.trim() || role === "user" ? { role, text } : undefined;
 }
 
+/** Stop waiting for `promise` after `ms`; the underlying work is not cancelled. */
+export async function withTimeout<T>(input: {
+  promise: Promise<T>;
+  ms: number;
+  message: string;
+}): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      input.promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(input.message)), input.ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** No cache: re-read the host and reconcile the live prompt before every review. */
 export async function readConversation(input: {
   load(): Promise<ConversationContext>;
@@ -122,21 +141,14 @@ export async function readConversation(input: {
     return latest === undefined ? {} : { userIntent: latest };
   }
   let conversation: ConversationContext = { turns: [], incomplete: false };
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    conversation = await Promise.race([
-      input.load(),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Session history timed out.")),
-          HISTORY_TIMEOUT_MS,
-        );
-      }),
-    ]);
+    conversation = await withTimeout({
+      promise: input.load(),
+      ms: HISTORY_TIMEOUT_MS,
+      message: "Session history timed out.",
+    });
   } catch {
     conversation.incomplete = true;
-  } finally {
-    clearTimeout(timer);
   }
   const latest = input.latest();
   if (

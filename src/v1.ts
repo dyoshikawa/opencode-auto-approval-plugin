@@ -14,7 +14,11 @@ import {
   readConversation,
 } from "./conversation.js";
 import type { ReviewSessionClient } from "./reviewer.js";
-import { createRootSessionResolver, unknownRootContext } from "./session-root.js";
+import {
+  createIntentTracker,
+  createRootSessionResolver,
+  parentIdentifier,
+} from "./session-root.js";
 import type { PluginDependencies } from "./shared.js";
 import { isRecord, reviewForApproval, reviewToolCallOrThrow, textFromParts } from "./shared.js";
 
@@ -132,7 +136,6 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
     });
     const models = new Map<string, ModelReference>();
     const intents = new Map<string, string>();
-    const revisions = new Map<string, number>();
     const conversation = (sessionID: string) =>
       readConversation({
         configuration: configuration.conversation,
@@ -153,26 +156,20 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
       });
     // Subagent (child) sessions are prompted by the parent agent, not by the
     // person, so the person's intent is read from the root session.
-    const rootSession = createRootSessionResolver(async (sessionID) => {
-      const client = context.client as unknown as SdkClient;
-      if (!client.session?.get) throw new Error("Session lookup is unavailable.");
-      return parentIdentifier(
-        await client.session.get({
-          path: { id: sessionID },
-          query: { directory: context.directory },
-        }),
-      );
+    const tracker = createIntentTracker({
+      rootSession: createRootSessionResolver(async (sessionID) => {
+        const client = context.client as unknown as SdkClient;
+        if (!client.session?.get) throw new Error("Session lookup is unavailable.");
+        return parentIdentifier(
+          await client.session.get({
+            path: { id: sessionID },
+            query: { directory: context.directory },
+          }),
+        );
+      }),
+      conversation,
+      conversationEnabled: configuration.conversation.enabled,
     });
-    const reviewContext = async (sessionID: string) => {
-      const root = await rootSession(sessionID);
-      if (root === undefined) {
-        return {
-          revision: () => revisions.get(sessionID),
-          context: async () => unknownRootContext(configuration.conversation.enabled),
-        };
-      }
-      return { revision: () => revisions.get(root), context: () => conversation(root) };
-    };
 
     return {
       config: async (config) => {
@@ -190,7 +187,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
           event.sessionID,
           textFromParts({ parts: output.parts, skipSyntheticOrIgnored: true }),
         );
-        revisions.set(event.sessionID, (revisions.get(event.sessionID) ?? 0) + 1);
+        tracker.prompted(event.sessionID);
         return Promise.resolve();
       },
       "chat.params": (event) => {
@@ -210,8 +207,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         const action = request.permission !== undefined ? request.permission : request.type;
         if (typeof action !== "string" || action.trim().length === 0) return;
 
-        const intent = await reviewContext(request.sessionID);
-        const revision = intent.revision();
+        const intent = await tracker.begin(request.sessionID);
         const decision = await reviewForApproval({
           reviewer,
           request: {
@@ -223,7 +219,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
             model: models.get(request.sessionID),
           },
         });
-        if (decision === undefined || intent.revision() !== revision) return;
+        if (decision === undefined || intent.changed()) return;
 
         try {
           await context.client.postSessionIdPermissionsPermissionId({
@@ -242,8 +238,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         )
           return;
 
-        const intent = await reviewContext(event.sessionID);
-        const revision = intent.revision();
+        const intent = await tracker.begin(event.sessionID);
         await reviewToolCallOrThrow({
           reviewer,
           request: {
@@ -255,7 +250,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
             model: models.get(event.sessionID),
           },
         });
-        if (intent.revision() !== revision) {
+        if (intent.changed()) {
           throw new Error("User intent changed during review; human review is required.");
         }
       },
@@ -269,17 +264,6 @@ function sessionIdentifier(input: unknown): string {
     return input.data.id;
   }
   throw new Error("OpenCode SDK did not return a reviewer session ID.");
-}
-
-/** The session's `parentID`, or `undefined` for a root session. */
-function parentIdentifier(input: unknown): string | undefined {
-  const session = isRecord(input) && isRecord(input.data) ? input.data : input;
-  if (!isRecord(session) || typeof session.id !== "string") {
-    throw new Error("OpenCode SDK did not return the session.");
-  }
-  if (session.parentID === undefined || session.parentID === null) return undefined;
-  if (typeof session.parentID !== "string") throw new Error("Session parentID is malformed.");
-  return session.parentID;
 }
 
 function responseText(input: unknown): string {

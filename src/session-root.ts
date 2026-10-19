@@ -1,4 +1,6 @@
-import { HISTORY_TIMEOUT_MS } from "./conversation.js";
+import * as z from "zod/mini";
+
+import { HISTORY_TIMEOUT_MS, withTimeout } from "./conversation.js";
 
 /** Subagents nest a few levels at most; a longer chain is treated as unknown. */
 export const MAX_SESSION_DEPTH = 8;
@@ -20,12 +22,17 @@ export function createRootSessionResolver(
 ): (sessionID: string) => Promise<string | undefined> {
   // A session's parent never changes, so a resolved root can be reused.
   const roots = new Map<string, string>();
-  const resolve = async (sessionID: string): Promise<string | undefined> => {
+  // Parallel tool calls of one session share a single walk up the chain.
+  const pending = new Map<string, Promise<string | undefined>>();
+  const walk = async (sessionID: string): Promise<string | undefined> => {
     const seen = new Set<string>();
     let current = sessionID;
     for (let depth = 0; depth <= MAX_SESSION_DEPTH; depth++) {
-      const known = roots.get(current);
-      if (known !== undefined) return known;
+      const root = roots.get(current);
+      if (root !== undefined) {
+        for (const visited of seen) roots.set(visited, root);
+        return root;
+      }
       if (seen.has(current)) return undefined;
       seen.add(current);
       const parent = await parentOf(current);
@@ -38,28 +45,85 @@ export function createRootSessionResolver(
     return undefined;
   };
   return async (sessionID) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const known = roots.get(sessionID);
+    if (known !== undefined) return known;
+    let lookup = pending.get(sessionID);
+    if (lookup === undefined) {
+      lookup = walk(sessionID).finally(() => pending.delete(sessionID));
+      pending.set(sessionID, lookup);
+    }
     try {
-      return await Promise.race([
-        resolve(sessionID),
-        new Promise<undefined>((done) => {
-          timer = setTimeout(() => done(undefined), HISTORY_TIMEOUT_MS);
-        }),
-      ]);
+      return await withTimeout({
+        promise: lookup,
+        ms: HISTORY_TIMEOUT_MS,
+        message: "Session lookup timed out.",
+      });
     } catch {
       return undefined;
-    } finally {
-      clearTimeout(timer);
     }
   };
 }
 
+const sessionSchema = z.object({
+  id: z.string(),
+  parentID: z.optional(z.nullable(z.string())),
+});
+
+/** The `parentID` of a session (bare or wrapped in `{data}`), `undefined` for a root. */
+export function parentIdentifier(input: unknown): string | undefined {
+  const wrapped = z.object({ data: sessionSchema }).safeParse(input);
+  const session = wrapped.success ? wrapped.data.data : sessionSchema.safeParse(input).data;
+  if (session === undefined) throw new Error("OpenCode did not return the session.");
+  return session.parentID ?? undefined;
+}
+
+/** What a review should carry, and how to tell whether it went stale. */
+type ReviewIntent<Context> = {
+  /** True once the person prompted the intent's session after the review began. */
+  changed(): boolean;
+  /** The root session's intent and conversation, or none when the root is unknown. */
+  context(): Promise<Context | UnknownRootContext>;
+};
+
+type UnknownRootContext = { conversation?: { turns: never[]; incomplete: true } };
+
 /**
- * The review context when the root session is unknown: no user intent, and,
- * when conversation context is on, an empty conversation marked incomplete.
+ * Track prompts and hand each review the intent of its root session.
+ *
+ * Every prompt gets a sequence number. A review records the current number
+ * synchronously when it begins, so a prompt in the root session at any point
+ * afterwards — even while the root is still being looked up — marks the review
+ * as stale.
  */
-export function unknownRootContext(conversationEnabled: boolean): {
-  conversation?: { turns: never[]; incomplete: true };
+export function createIntentTracker<Context>(input: {
+  rootSession(sessionID: string): Promise<string | undefined>;
+  conversation(rootSessionID: string): Promise<Context>;
+  conversationEnabled: boolean;
+}): {
+  prompted(sessionID: string): void;
+  begin(sessionID: string): Promise<ReviewIntent<Context>>;
 } {
-  return conversationEnabled ? { conversation: { turns: [], incomplete: true } } : {};
+  let sequence = 0;
+  const latestPrompt = new Map<string, number>();
+  return {
+    prompted: (sessionID) => {
+      sequence += 1;
+      latestPrompt.set(sessionID, sequence);
+    },
+    begin: async (sessionID) => {
+      const start = sequence;
+      const root = await input.rootSession(sessionID);
+      // Unknown root: the session's own prompts still cancel, but carry no intent.
+      const intentSession = root ?? sessionID;
+      return {
+        changed: () => (latestPrompt.get(intentSession) ?? 0) > start,
+        context: async () =>
+          root === undefined
+            ? input.conversationEnabled
+              ? { conversation: { turns: [], incomplete: true } }
+              : {}
+            : input.conversation(root),
+      };
+    },
+  };
 }

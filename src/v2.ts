@@ -10,7 +10,11 @@ import type { ModelReference } from "./config.js";
 import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
 import { conversationFromMessages, readConversation } from "./conversation.js";
 import type { ReviewSessionClient } from "./reviewer.js";
-import { createRootSessionResolver, unknownRootContext } from "./session-root.js";
+import {
+  createIntentTracker,
+  createRootSessionResolver,
+  parentIdentifier,
+} from "./session-root.js";
 import type { PluginDependencies } from "./shared.js";
 import { reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
 
@@ -88,7 +92,6 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         directory: context.location.directory,
       });
       const intents = new Map<string, string>();
-      const revisions = new Map<string, number>();
       const conversation = (sessionID: string) =>
         readConversation({
           configuration: configuration.conversation,
@@ -103,20 +106,13 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         });
       // Subagent (child) sessions are prompted by the parent agent, not by the
       // person, so the person's intent is read from the root session.
-      const rootSession = createRootSessionResolver(async (sessionID) => {
-        const session = await context.session.get({ sessionID });
-        return session.parentID;
+      const tracker = createIntentTracker({
+        rootSession: createRootSessionResolver(async (sessionID) =>
+          parentIdentifier(await context.session.get({ sessionID })),
+        ),
+        conversation,
+        conversationEnabled: configuration.conversation.enabled,
       });
-      const reviewContext = async (sessionID: string) => {
-        const root = await rootSession(sessionID);
-        if (root === undefined) {
-          return {
-            revision: () => revisions.get(sessionID),
-            context: async () => unknownRootContext(configuration.conversation.enabled),
-          };
-        }
-        return { revision: () => revisions.get(root), context: () => conversation(root) };
-      };
 
       // `update` on an unknown ID registers a new agent; the branded ID/Name
       // types are plain strings at runtime. Only the agent reviewer needs one,
@@ -147,7 +143,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
         if (event.metadata?.synthetic || event.metadata?.ignored) return;
         intents.set(event.sessionID, event.prompt.text);
-        revisions.set(event.sessionID, (revisions.get(event.sessionID) ?? 0) + 1);
+        tracker.prompted(event.sessionID);
       });
 
       const sessionModel = async (sessionID: string): Promise<ModelReference | undefined> => {
@@ -165,8 +161,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         await context.permission.hook("evaluate", async (event) => {
           if (event.effect !== "ask" || isReviewer(event)) return;
 
-          const intent = await reviewContext(event.sessionID);
-          const revision = intent.revision();
+          const intent = await tracker.begin(event.sessionID);
           const decision = await reviewForApproval({
             reviewer,
             request: {
@@ -178,7 +173,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
               model: await sessionModel(event.sessionID),
             },
           });
-          if (decision === undefined || intent.revision() !== revision) return;
+          if (decision === undefined || intent.changed()) return;
           event.effect = "allow";
           event.message = decision.reason;
         });
@@ -188,8 +183,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       await context.tool.hook("execute.before", async (event) => {
         if (isReviewer(event)) return;
 
-        const intent = await reviewContext(event.sessionID);
-        const revision = intent.revision();
+        const intent = await tracker.begin(event.sessionID);
         await reviewToolCallOrThrow({
           reviewer,
           request: {
@@ -201,7 +195,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
             model: await sessionModel(event.sessionID),
           },
         });
-        if (intent.revision() !== revision) {
+        if (intent.changed()) {
           throw new Error("User intent changed during review; human review is required.");
         }
       });

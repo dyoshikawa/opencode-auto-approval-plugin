@@ -320,6 +320,66 @@ describe("V1 plugin (opencode 1.x)", () => {
     );
   });
 
+  it("does not answer a subagent's permission when the person prompts the root session during review", async () => {
+    const { context, get, reply } = createContext();
+    get.mockImplementation(async (input: { path: { id: string } }) =>
+      input.path.id === "child-session"
+        ? { data: { id: "child-session", parentID: "session-1" } }
+        : { data: { id: input.path.id } },
+    );
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, {});
+    review.mockImplementationOnce(async () => {
+      await hooks["chat.message"]?.({ sessionID: "session-1" } as never, {
+        message: {} as never,
+        parts: [{ type: "text", text: "stop" }] as never,
+      });
+      return { verdict: "allow", reason: "stale" };
+    });
+
+    await hooks.event?.({
+      event: {
+        type: "permission.updated",
+        properties: { id: "p", sessionID: "child-session", type: "bash" },
+      },
+    } as never);
+
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(reply).not.toHaveBeenCalled();
+  });
+
+  it("blocks a subagent's tool call in all-tools mode when the root session is prompted during review", async () => {
+    const { context, get } = createContext();
+    get.mockImplementation(async (input: { path: { id: string } }) =>
+      input.path.id === "child-session"
+        ? { data: { id: "child-session", parentID: "session-1" } }
+        : { data: { id: input.path.id } },
+    );
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const hooks = await plugin(context as never, { mode: "all-tools" });
+    await hooks["chat.message"]?.({ sessionID: "session-1" } as never, {
+      message: {} as never,
+      parts: [{ type: "text", text: "run the tests" }] as never,
+    });
+    review.mockImplementationOnce(async () => {
+      await hooks["chat.message"]?.({ sessionID: "session-1" } as never, {
+        message: {} as never,
+        parts: [{ type: "text", text: "stop" }] as never,
+      });
+      return { verdict: "allow", reason: "stale" };
+    });
+
+    await expect(
+      hooks["tool.execute.before"]?.(
+        { sessionID: "child-session", tool: "bash", callID: "c" } as never,
+        { args: { command: "pnpm test" } } as never,
+      ),
+    ).rejects.toThrow("User intent changed");
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionID: "child-session", userIntent: "run the tests" }),
+    );
+  });
+
   it("reviews without user intent when the session lookup is unavailable", async () => {
     const { context } = createContext();
     delete (context.client.session as { get?: unknown }).get;

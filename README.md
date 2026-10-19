@@ -171,9 +171,9 @@ reviewer does, including the decision backend's `onOversize: "agent"` fallback.
     without network access or web search, with `approval_policy = "never"` so that no request
     can lift the sandbox (a command the sandbox blocks fails), and without the project's
     `AGENTS.md`. Your own `~/.codex/config.toml` still loads, MCP servers included.
-- Claude Code's auto mode lets the reviewer read files outside the project when its classifier
-  judges the read safe: measured on 2026-10-17, Claude Code read `/etc/hostname` and searched
-  `/home` when asked to, and Codex's read-only sandbox can read the whole disk. What it reads reaches the model
+- Both can read files outside the project: Claude Code when its auto-mode classifier judges the
+  read safe (measured on 2026-10-17, it read `/etc/hostname` and searched `/home` when asked to),
+  Codex because its read-only sandbox can read the whole disk. What it reads reaches the model
   provider and, cut to 300 characters, the verdict reason. Use the `"opencode"` runtime if that is
   not acceptable.
 - Reviews run in Claude Code or Codex, not in OpenCode, so they are not in `opencode stats`; they
@@ -596,9 +596,11 @@ prompt injection.
 Subagent sessions (started by the `task` tool) are prompted by the parent agent, not by you, so
 their prompts never count as user intent. A review of an operation in a subagent session follows
 the session's `parentID` chain to the root session and uses that session's latest prompt and, when
-enabled, its conversation; a new prompt there also cancels the subagent's pending result. If the
-chain cannot be read within the history timeout, the operation is reviewed without any user intent
-(and an enabled conversation is marked incomplete).
+enabled, its conversation; a new prompt there also cancels the subagent's pending result. The
+chain is looked up once per session and cached; that lookup has its own 1-second timeout, so a
+session's first review can wait up to 2 seconds with history enabled. If the chain cannot be read
+in time, the operation is reviewed without any user intent (and an enabled conversation is marked
+incomplete).
 
 Every backend receives the same operation data, and the retained conversation counts toward each
 backend's size limit: an operation that no longer fits is handled like any other oversized one
