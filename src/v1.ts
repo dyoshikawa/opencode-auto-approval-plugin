@@ -14,6 +14,11 @@ import {
   readConversation,
 } from "./conversation.js";
 import type { ReviewSessionClient } from "./reviewer.js";
+import {
+  createIntentTracker,
+  createRootSessionResolver,
+  parentIdentifier,
+} from "./session-root.js";
 import type { PluginDependencies } from "./shared.js";
 import { isRecord, reviewForApproval, reviewToolCallOrThrow, textFromParts } from "./shared.js";
 
@@ -41,6 +46,7 @@ const reviewerTools = Object.fromEntries(reviewerAllowedTools.map((tool) => [too
 
 type SdkClient = {
   session: {
+    get?(input: { path: { id: string }; query: { directory: string } }): Promise<unknown>;
     messages?(input: {
       path: { id: string };
       query: { directory: string; limit: number };
@@ -130,7 +136,6 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
     });
     const models = new Map<string, ModelReference>();
     const intents = new Map<string, string>();
-    const revisions = new Map<string, number>();
     const conversation = (sessionID: string) =>
       readConversation({
         configuration: configuration.conversation,
@@ -149,6 +154,22 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
           });
         },
       });
+    // Subagent (child) sessions are prompted by the parent agent, not by the
+    // person, so the person's intent is read from the root session.
+    const tracker = createIntentTracker({
+      rootSession: createRootSessionResolver(async (sessionID) => {
+        const client = context.client as unknown as SdkClient;
+        if (!client.session?.get) throw new Error("Session lookup is unavailable.");
+        return parentIdentifier(
+          await client.session.get({
+            path: { id: sessionID },
+            query: { directory: context.directory },
+          }),
+        );
+      }),
+      conversation,
+      conversationEnabled: configuration.conversation.enabled,
+    });
 
     return {
       config: async (config) => {
@@ -166,7 +187,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
           event.sessionID,
           textFromParts({ parts: output.parts, skipSyntheticOrIgnored: true }),
         );
-        revisions.set(event.sessionID, (revisions.get(event.sessionID) ?? 0) + 1);
+        tracker.prompted(event.sessionID);
         return Promise.resolve();
       },
       "chat.params": (event) => {
@@ -186,7 +207,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         const action = request.permission !== undefined ? request.permission : request.type;
         if (typeof action !== "string" || action.trim().length === 0) return;
 
-        const revision = revisions.get(request.sessionID);
+        const intent = await tracker.begin(request.sessionID);
         const decision = await reviewForApproval({
           reviewer,
           request: {
@@ -194,11 +215,11 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
             sessionID: request.sessionID,
             action,
             resource: { pattern: request.patterns ?? request.pattern, metadata: request.metadata },
-            ...(await conversation(request.sessionID)),
+            ...(await intent.context()),
             model: models.get(request.sessionID),
           },
         });
-        if (decision === undefined || revisions.get(request.sessionID) !== revision) return;
+        if (decision === undefined || intent.changed()) return;
 
         try {
           await context.client.postSessionIdPermissionsPermissionId({
@@ -217,7 +238,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         )
           return;
 
-        const revision = revisions.get(event.sessionID);
+        const intent = await tracker.begin(event.sessionID);
         await reviewToolCallOrThrow({
           reviewer,
           request: {
@@ -225,11 +246,11 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
             sessionID: event.sessionID,
             action: event.tool,
             resource: output.args,
-            ...(await conversation(event.sessionID)),
+            ...(await intent.context()),
             model: models.get(event.sessionID),
           },
         });
-        if (revisions.get(event.sessionID) !== revision) {
+        if (intent.changed()) {
           throw new Error("User intent changed during review; human review is required.");
         }
       },

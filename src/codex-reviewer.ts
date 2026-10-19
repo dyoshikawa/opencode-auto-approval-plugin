@@ -29,9 +29,10 @@ const codexReviewerInstructions =
 /**
  * The agent reviewer on Codex through the Codex SDK. Codex inspects the
  * workspace through shell commands, so the session runs in the read-only
- * sandbox without network access, ignores the project's AGENTS.md, and runs
- * in auto mode: every approval request goes to Codex's automatic reviewer,
- * since nobody is there to answer it.
+ * sandbox without network access, ignores the project's AGENTS.md, and never
+ * asks for approval: nobody is there to answer, and an approved request could
+ * run a command outside the read-only sandbox. A command the sandbox blocks
+ * simply fails.
  */
 export class CodexReviewer implements Reviewer {
   readonly #configuration: PluginConfiguration;
@@ -93,8 +94,6 @@ export class CodexReviewer implements Reviewer {
     const createCodex = await this.#createCodex();
     const codex = createCodex({
       config: {
-        // Auto mode: approval requests go to Codex's automatic reviewer.
-        approvals_reviewer: "auto_review",
         developer_instructions: codexReviewerInstructions,
         // The project's AGENTS.md is repository content, not the user's policy.
         project_doc_max_bytes: 0,
@@ -105,7 +104,9 @@ export class CodexReviewer implements Reviewer {
       workingDirectory: this.#directory,
       skipGitRepoCheck: true,
       sandboxMode: "read-only",
-      approvalPolicy: "on-request",
+      // "never": no request may lift the read-only sandbox, not even one an
+      // automatic reviewer would approve.
+      approvalPolicy: "never",
       networkAccessEnabled: false,
       webSearchMode: "disabled",
     });

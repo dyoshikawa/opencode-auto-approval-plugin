@@ -28,15 +28,10 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
 
-      - name: Setup mise
-        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
-        with:
-          experimental: true
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
+      # Runs before mise or any dependency touches the checkout, on the runner's
+      # preinstalled node and git: an unverified ref must not run its own code.
       - name: Verify release source
         run: |
           set -euo pipefail
@@ -59,6 +54,16 @@ jobs:
             exit 1
           fi
 
+      - name: Setup mise
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+        with:
+          experimental: true
+
+      # Lifecycle scripts stay off: this job holds an npm publishing token
+      # (id-token: write), and nothing here needs a dependency's install script.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
       - name: Run cicheck
         run: pnpm cicheck
 
@@ -66,4 +71,5 @@ jobs:
         run: pnpm build
 
       - name: Publish to npm
-        run: pnpm publish --no-git-checks
+        # Built above; publishing runs no lifecycle script (prepare, prepack, ...).
+        run: pnpm publish --no-git-checks --ignore-scripts

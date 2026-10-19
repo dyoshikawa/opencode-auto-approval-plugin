@@ -68,7 +68,7 @@ function fakeCodex(
 }
 
 describe("CodexReviewer", () => {
-  it("reviews in a read-only Codex thread in auto mode", async () => {
+  it("reviews in a read-only Codex thread that never asks for approval", async () => {
     const codex = fakeCodex();
     const records: UsageRecord[] = [];
     const reviewer = new CodexReviewer({
@@ -86,10 +86,7 @@ describe("CodexReviewer", () => {
 
     expect(codex.codex).toEqual([
       {
-        config: expect.objectContaining({
-          approvals_reviewer: "auto_review",
-          project_doc_max_bytes: 0,
-        }),
+        config: expect.objectContaining({ project_doc_max_bytes: 0 }),
       },
     ]);
     expect(codex.threads).toEqual([
@@ -98,11 +95,13 @@ describe("CodexReviewer", () => {
         workingDirectory: "/work/project",
         skipGitRepoCheck: true,
         sandboxMode: "read-only",
-        approvalPolicy: "on-request",
+        approvalPolicy: "never",
         networkAccessEnabled: false,
         webSearchMode: "disabled",
       },
     ]);
+    // No approval request may lift the read-only sandbox.
+    expect(codex.codex[0]?.config).not.toHaveProperty("approvals_reviewer");
     expect(codex.runs[0]?.input).toContain('"command":"pnpm test"');
     expect(reviewer.isReviewerSession()).toBe(false);
     expect(records).toEqual([
