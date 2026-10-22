@@ -119,6 +119,8 @@ type AgentConfiguration = {
 
 export type PluginConfiguration = {
   mode: ReviewerMode;
+  /** V2 all-tools: preserve native asks unless explicitly opted into AI review. */
+  allToolsNativeAsks: "preserve" | "review";
   auditLog: { enabled: boolean; includeCommand: boolean; path?: string };
   conversation: { enabled: boolean; includeAssistant: boolean };
   reviewer: {
@@ -270,6 +272,7 @@ const pluginConfigurationSchema = z.object({
     }),
   ),
   mode: z.optional(z.enum(reviewerModes)),
+  allToolsNativeAsks: z.optional(z.enum(["preserve", "review"] as const)),
   reviewer: z.optional(
     z.object({
       backend: z.optional(z.enum(reviewerBackends)),
@@ -317,6 +320,7 @@ export function parsePluginConfiguration(input: {
   const decision = backend === "decision" ? decisionConfiguration({ reviewer, env }) : undefined;
   const configuration: PluginConfiguration = {
     mode: result.data.mode ?? "on-ask",
+    allToolsNativeAsks: result.data.allToolsNativeAsks ?? "preserve",
     auditLog: auditConfiguration(result.data.auditLog),
     conversation: conversationConfiguration(result.data.conversation),
     reviewer: {
