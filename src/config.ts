@@ -183,9 +183,12 @@ const defaultChatBaseURL = "https://api.openai.com/v1";
 
 /**
  * Custom instructions are sent with every review (and billed per call with the
- * decision backend), so they are kept to a short policy rather than a document.
+ * decision backend), so by default they are kept to a short policy rather than
+ * a document. `reviewer.maxInstructionsChars` raises the limit up to the
+ * ceiling, which matches the default `maxInputBytes` of the LLM reviewers.
  */
-const MAX_INSTRUCTIONS_CHARS = 4_000;
+const defaultMaxInstructionsChars = 4_000;
+const maxInstructionsCharsCeiling = 200_000;
 
 const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -272,6 +275,9 @@ const pluginConfigurationSchema = z.object({
       model: z.optional(modelReferenceSchema),
       timeoutMs: z.optional(z.number().check(z.gte(1), z.lte(120_000))),
       instructions: z.optional(z.union([z.string(), z.array(z.string())])),
+      maxInstructionsChars: z.optional(
+        z.int().check(z.gte(defaultMaxInstructionsChars), z.lte(maxInstructionsCharsCeiling)),
+      ),
       recordUsage: z.optional(z.boolean()),
       // Checked only when the decision backend reads them, so another backend
       // starts whatever they hold. `decisionModel` and `jev` are deprecated.
@@ -300,7 +306,10 @@ export function parsePluginConfiguration(input: {
   const reviewer = result.data.reviewer;
   rejectMixedNames(reviewer);
   const backend = normalizedBackend(reviewer?.backend);
-  const instructions = reviewerInstructions(reviewer?.instructions);
+  const instructions = reviewerInstructions({
+    input: reviewer?.instructions,
+    maxChars: reviewer?.maxInstructionsChars ?? defaultMaxInstructionsChars,
+  });
   const env = input.env ?? process.env;
   const decision = backend === "decision" ? decisionConfiguration({ reviewer, env }) : undefined;
   return {
@@ -382,15 +391,21 @@ export function usesAgentReviewer(configuration: PluginConfiguration): boolean {
  * form in JSON, which cannot hold a multi-line string; blank entries are
  * dropped so a list can be commented out line by line.
  */
-function reviewerInstructions(input: string | string[] | undefined): string | undefined {
+function reviewerInstructions({
+  input,
+  maxChars,
+}: {
+  input: string | string[] | undefined;
+  maxChars: number;
+}): string | undefined {
   const lines = (typeof input === "string" ? [input] : (input ?? []))
     .map((line) => line.trim())
     .filter((line) => line !== "");
   if (lines.length === 0) return undefined;
   const text = lines.join("\n");
-  if (text.length > MAX_INSTRUCTIONS_CHARS) {
+  if (text.length > maxChars) {
     throw new Error(
-      `Invalid auto-approval plugin options: reviewer.instructions must be at most ${MAX_INSTRUCTIONS_CHARS} characters.`,
+      `Invalid auto-approval plugin options: reviewer.instructions must be at most ${maxChars} characters; raise reviewer.maxInstructionsChars to allow more.`,
     );
   }
   return text;

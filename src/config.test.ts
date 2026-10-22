@@ -285,6 +285,48 @@ describe("parsePluginConfiguration", () => {
         }),
       ).toThrow("reviewer.instructions must be at most 4000 characters");
     });
+
+    it("accepts longer instructions up to a raised maxInstructionsChars", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: { instructions: "x".repeat(10_000), maxInstructionsChars: 10_000 },
+          },
+          env: {},
+        }).reviewer.instructions,
+      ).toHaveLength(10_000);
+    });
+
+    it("rejects instructions longer than a raised maxInstructionsChars", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: { instructions: "x".repeat(10_001), maxInstructionsChars: 10_000 },
+          },
+          env: {},
+        }),
+      ).toThrow("reviewer.instructions must be at most 10000 characters");
+    });
+
+    it.each([3_999, 200_001, 5_000.5])("rejects maxInstructionsChars of %s", (value) => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { maxInstructionsChars: value } },
+          env: {},
+        }),
+      ).toThrow("Invalid auto-approval plugin options");
+    });
+
+    it("accepts maxInstructionsChars at the ceiling", () => {
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: { instructions: "x".repeat(200_000), maxInstructionsChars: 200_000 },
+          },
+          env: {},
+        }).reviewer.instructions,
+      ).toHaveLength(200_000);
+    });
   });
 
   it("does not require decision model credentials for the agent backend", () => {

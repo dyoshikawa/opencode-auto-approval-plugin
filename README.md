@@ -512,8 +512,11 @@ string.
 - They are guidance for an AI reviewer, not deterministic rules: the reviewer still sees the whole
   operation and may decide otherwise. Use OpenCode's own permission rules (`permissions` on 2.x,
   `permission` on 1.x) when a tool must always be allowed or denied. Explicit OpenCode `deny` rules still always win.
-- Blank entries are ignored, and the joined text may be at most 4,000 characters. With the
-  `decision` backend the instructions are sent, and billed, with every review.
+- Blank entries are ignored, and the joined text may be at most 4,000 characters by default. Set
+  `reviewer.maxInstructionsChars` (4,000–200,000) to allow a longer policy. The instructions are
+  sent, and billed, with every review, and they count toward each backend's size limit: the
+  `agent` and `chat` reviewers' `maxInputBytes`, and the decision model's per-request token limit,
+  so very long instructions leave less room for the operation and can make reviews too large.
 - Instructions can widen what is approved automatically, so set them only in configuration you
   trust, like `baseURL`, `minAllowProbability` and `longContext` — not in a repository's `opencode.json` you have
   not reviewed.
