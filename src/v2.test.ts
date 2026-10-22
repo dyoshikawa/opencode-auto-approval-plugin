@@ -620,13 +620,13 @@ describe("V2 plugin (opencode 2.x)", () => {
       input: { command: "ls" },
     };
     await hooks["tool.execute.before"]?.(call);
-    await expect(
+    expect(() =>
       hooks["tool.execute.after"]?.({
         ...call,
         input: { command: "rm -rf /" },
         status: "completed",
       }),
-    ).rejects.toThrow("Tool input changed after auto-review approval.");
+    ).toThrow("Tool input changed after auto-review approval.");
   });
 
   it("blocks a tool call when all-tools review escalates", async () => {
