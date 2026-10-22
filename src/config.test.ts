@@ -91,9 +91,9 @@ describe("parsePluginConfiguration", () => {
         options: { mode: "all-tools", allToolsNativeAsks: "review" },
       }).allToolsNativeAsks,
     ).toBe("review");
-    expect(() =>
-      parsePluginConfiguration({ options: { allToolsNativeAsks: "invalid" } }),
-    ).toThrow("Invalid auto-approval plugin options");
+    expect(() => parsePluginConfiguration({ options: { allToolsNativeAsks: "invalid" } })).toThrow(
+      "Invalid auto-approval plugin options",
+    );
   });
 
   describe("agent runtime", () => {
