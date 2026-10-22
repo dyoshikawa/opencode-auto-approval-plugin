@@ -465,6 +465,34 @@ function oversizeReviewer(input: { response: () => Promise<Response>; maxStateTo
 }
 
 describe("DecisionReviewer with an operation too large for the model", () => {
+  it("counts configured instructions toward the budget", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => answer({ choice: "allow" }));
+    const reviewer = new DecisionReviewer({
+      configuration: parsePluginConfiguration({
+        options: {
+          reviewer: {
+            backend: "decision",
+            // About 24,000 tokens: a 10,000-token operation alone would fit.
+            instructions: "x".repeat(60_000),
+            maxInstructionsChars: 60_000,
+            decision: { provider: "typesafe" },
+          },
+        },
+        env: { TYPESAFE_API_KEY: "test-key" },
+      }),
+      fetch,
+    });
+
+    await expect(
+      reviewer.review({
+        ...request,
+        action: "edit",
+        resource: { filePath: "doc.md", content: "x".repeat(25_000) },
+      }),
+    ).rejects.toThrow(/too large for jev-latest \(about 34,\d\d\d tokens, budget 28,000\)/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("does not send an operation whose estimate exceeds the budget", async () => {
     const { reviewer, fetch, records } = oversizeReviewer({
       response: async () => answer({ choice: "allow" }),

@@ -172,7 +172,9 @@ export class DecisionReviewer implements Reviewer {
     const state = reviewState(input.request);
     const { model, maxStateTokens, longContext } = this.#configuration;
     const serialized = JSON.stringify(state);
-    const estimate = estimateTokens(serialized);
+    // The instructions travel in the question, which shares the state's limit.
+    const instructions = this.#instructions ?? "";
+    const estimate = estimateTokens(serialized) + estimateTokens(instructions);
     const needsLongContext = estimate > maxStateTokens && longContext !== undefined;
     const budget = needsLongContext ? longContext.maxStateTokens : maxStateTokens;
     if (estimate > budget) {
@@ -202,7 +204,11 @@ export class DecisionReviewer implements Reviewer {
       input.tokens.input = usage.data.usage?.input_tokens ?? null;
       input.tokens.output = usage.data.usage?.output_tokens ?? null;
     }
-    assertReadWhole({ model, prompt: serialized, reportedTokens: input.tokens.input });
+    assertReadWhole({
+      model,
+      prompt: `${serialized}${instructions}`,
+      reportedTokens: input.tokens.input,
+    });
     const longThreshold = long ? longContext?.minAllowProbability : undefined;
     return this.#verdict({
       answer: body,

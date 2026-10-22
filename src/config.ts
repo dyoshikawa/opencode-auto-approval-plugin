@@ -2,6 +2,8 @@ import { isAbsolute } from "node:path";
 
 import * as z from "zod/mini";
 
+import { estimateTokens } from "./reviewer.js";
+
 const reviewerModes = ["on-ask", "all-tools"] as const;
 
 /**
@@ -183,9 +185,13 @@ const defaultChatBaseURL = "https://api.openai.com/v1";
 
 /**
  * Custom instructions are sent with every review (and billed per call with the
- * decision backend), so they are kept to a short policy rather than a document.
+ * decision backend), so by default they are kept to a short policy rather than
+ * a document. `reviewer.maxInstructionsChars` raises the limit up to the
+ * ceiling; each reviewer in use must still have room left for the operation
+ * (see `assertInstructionsFit`).
  */
-const MAX_INSTRUCTIONS_CHARS = 4_000;
+const defaultMaxInstructionsChars = 4_000;
+const maxInstructionsCharsCeiling = 200_000;
 
 const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -272,6 +278,9 @@ const pluginConfigurationSchema = z.object({
       model: z.optional(modelReferenceSchema),
       timeoutMs: z.optional(z.number().check(z.gte(1), z.lte(120_000))),
       instructions: z.optional(z.union([z.string(), z.array(z.string())])),
+      maxInstructionsChars: z.optional(
+        z.int().check(z.gte(defaultMaxInstructionsChars), z.lte(maxInstructionsCharsCeiling)),
+      ),
       recordUsage: z.optional(z.boolean()),
       // Checked only when the decision backend reads them, so another backend
       // starts whatever they hold. `decisionModel` and `jev` are deprecated.
@@ -300,10 +309,13 @@ export function parsePluginConfiguration(input: {
   const reviewer = result.data.reviewer;
   rejectMixedNames(reviewer);
   const backend = normalizedBackend(reviewer?.backend);
-  const instructions = reviewerInstructions(reviewer?.instructions);
+  const instructions = reviewerInstructions({
+    input: reviewer?.instructions,
+    maxChars: reviewer?.maxInstructionsChars ?? defaultMaxInstructionsChars,
+  });
   const env = input.env ?? process.env;
   const decision = backend === "decision" ? decisionConfiguration({ reviewer, env }) : undefined;
-  return {
+  const configuration: PluginConfiguration = {
     mode: result.data.mode ?? "on-ask",
     auditLog: auditConfiguration(result.data.auditLog),
     conversation: conversationConfiguration(result.data.conversation),
@@ -319,6 +331,49 @@ export function parsePluginConfiguration(input: {
         : {}),
     },
   };
+  assertInstructionsFit(configuration);
+  return configuration;
+}
+
+/**
+ * Instructions go out with every review and count toward each reviewer's size
+ * limit, so instructions that leave no room for the operation would make every
+ * review too large. That fails at startup instead of escalating every call.
+ */
+function instructionsTooLarge({ size, limit }: { size: string; limit: string }): never {
+  throw new Error(
+    `Invalid auto-approval plugin options: reviewer.instructions (${size}) leave no room for the operation within ${limit}.`,
+  );
+}
+
+function assertInstructionsFit(configuration: PluginConfiguration): void {
+  const { instructions, backend, agent, chat, decision } = configuration.reviewer;
+  if (instructions === undefined) return;
+  const bytes = Buffer.byteLength(instructions, "utf8");
+  if ((backend === "agent" || decision?.onOversize === "agent") && bytes >= agent.maxInputBytes) {
+    instructionsTooLarge({
+      size: `${bytes.toLocaleString("en-US")} bytes`,
+      limit: `reviewer.agent.maxInputBytes (${agent.maxInputBytes.toLocaleString("en-US")})`,
+    });
+  }
+  if (chat !== undefined && bytes >= chat.maxInputBytes) {
+    instructionsTooLarge({
+      size: `${bytes.toLocaleString("en-US")} bytes`,
+      limit: `reviewer.chat.maxInputBytes (${chat.maxInputBytes.toLocaleString("en-US")})`,
+    });
+  }
+  if (decision !== undefined) {
+    const tokens = estimateTokens(instructions);
+    const budget = decision.longContext?.maxStateTokens ?? decision.maxStateTokens;
+    const name =
+      decision.longContext === undefined ? "maxStateTokens" : "longContext.maxStateTokens";
+    if (tokens >= budget) {
+      instructionsTooLarge({
+        size: `about ${tokens.toLocaleString("en-US")} tokens`,
+        limit: `reviewer.decision.${name} (${budget.toLocaleString("en-US")})`,
+      });
+    }
+  }
 }
 
 function conversationConfiguration(
@@ -382,15 +437,25 @@ export function usesAgentReviewer(configuration: PluginConfiguration): boolean {
  * form in JSON, which cannot hold a multi-line string; blank entries are
  * dropped so a list can be commented out line by line.
  */
-function reviewerInstructions(input: string | string[] | undefined): string | undefined {
+function reviewerInstructions({
+  input,
+  maxChars,
+}: {
+  input: string | string[] | undefined;
+  maxChars: number;
+}): string | undefined {
   const lines = (typeof input === "string" ? [input] : (input ?? []))
     .map((line) => line.trim())
     .filter((line) => line !== "");
   if (lines.length === 0) return undefined;
   const text = lines.join("\n");
-  if (text.length > MAX_INSTRUCTIONS_CHARS) {
+  if (text.length > maxChars) {
+    const hint =
+      maxChars < maxInstructionsCharsCeiling
+        ? `; raise reviewer.maxInstructionsChars (up to ${maxInstructionsCharsCeiling}) to allow more`
+        : "";
     throw new Error(
-      `Invalid auto-approval plugin options: reviewer.instructions must be at most ${MAX_INSTRUCTIONS_CHARS} characters.`,
+      `Invalid auto-approval plugin options: reviewer.instructions must be at most ${maxChars} characters${hint}.`,
     );
   }
   return text;
