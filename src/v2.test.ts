@@ -434,15 +434,20 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(hooks["tool.execute.after"]).toBeDefined();
 
     const call = {
-      sessionID: "session-1", agent: "explore", messageID: "msg-1",
-      id: "call-1", tool: "shell", input: { command: "ls -la" },
-    };
-    const native = () => askEvent({
       sessionID: "session-1",
       agent: "explore",
-      action: "shell",
-      source: { type: "tool", messageID: "msg-1", id: "call-1" },
-    });
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls -la" },
+    };
+    const native = () =>
+      askEvent({
+        sessionID: "session-1",
+        agent: "explore",
+        action: "shell",
+        source: { type: "tool", messageID: "msg-1", id: "call-1" },
+      });
     const premature = native();
     await hooks["permission.evaluate"]?.(premature);
     expect(premature.effect).toBe("ask");
@@ -466,11 +471,17 @@ describe("V2 plugin (opencode 2.x)", () => {
     const { plugin } = createPlugin({ verdict: "allow" });
     await plugin.setup(context as never);
     await hooks["tool.execute.before"]?.({
-      sessionID: "session-1", agent: "explore", messageID: "msg-1",
-      id: "call-1", tool: "shell", input: { command: "ls" },
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
     });
     const base = {
-      sessionID: "session-1", agent: "explore", action: "shell",
+      sessionID: "session-1",
+      agent: "explore",
+      action: "shell",
       source: { type: "tool", messageID: "msg-1", id: "call-1" },
     };
     for (const changes of [
@@ -496,8 +507,12 @@ describe("V2 plugin (opencode 2.x)", () => {
     const { plugin, review } = createPlugin({ verdict: "allow" });
     await plugin.setup(context as never);
     await hooks["tool.execute.before"]?.({
-      sessionID: "session-1", agent: "explore", messageID: "msg-1",
-      id: "call-1", tool: "shell", input: { command: "cat internal-link" },
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "cat internal-link" },
     });
     review.mockResolvedValueOnce({ verdict: "escalate", reason: "outside checkout" });
     const external = askEvent({
@@ -507,15 +522,18 @@ describe("V2 plugin (opencode 2.x)", () => {
       source: { type: "tool", messageID: "msg-1", id: "call-1" },
     });
     await hooks["permission.evaluate"]?.(external);
-    expect(review).toHaveBeenLastCalledWith(expect.objectContaining({
-      source: "permission-request",
-      action: "external_directory",
-      resource: { resources: ["/private/resolved-target"], metadata: {} },
-    }));
+    expect(review).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        source: "permission-request",
+        action: "external_directory",
+        resource: { resources: ["/private/resolved-target"], metadata: {} },
+      }),
+    );
     expect(external.effect).toBe("deny");
 
     const shell = askEvent({
-      agent: "explore", action: "shell",
+      agent: "explore",
+      action: "shell",
       source: { type: "tool", messageID: "msg-1", id: "call-1" },
     });
     await hooks["permission.evaluate"]?.(shell);
@@ -535,12 +553,18 @@ describe("V2 plugin (opencode 2.x)", () => {
     await plugin.setup(context as never);
     await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "continue" } });
     await hooks["tool.execute.before"]?.({
-      sessionID: "child", agent: "explore", messageID: "msg-1",
-      id: "call-1", tool: "shell", input: { command: "ls" },
+      sessionID: "child",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
     });
     await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "stop" } });
     const event = askEvent({
-      sessionID: "child", agent: "explore", action: "shell",
+      sessionID: "child",
+      agent: "explore",
+      action: "shell",
       source: { type: "tool", messageID: "msg-1", id: "call-1" },
     });
     await hooks["permission.evaluate"]?.(event);
@@ -554,14 +578,19 @@ describe("V2 plugin (opencode 2.x)", () => {
     const { plugin } = createPlugin({ verdict: "allow" });
     await plugin.setup(context as never);
     await hooks["tool.execute.before"]?.({
-      sessionID: "session-1", agent: "explore", messageID: "msg-1",
-      id: "call-1", tool: "shell", input: { command: "ls" },
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
     });
     vi.useFakeTimers();
     try {
       vi.setSystemTime(Date.now() + 45_001);
       const event = askEvent({
-        agent: "explore", action: "shell",
+        agent: "explore",
+        action: "shell",
         source: { type: "tool", messageID: "msg-1", id: "call-1" },
       });
       await hooks["permission.evaluate"]?.(event);
@@ -578,13 +607,21 @@ describe("V2 plugin (opencode 2.x)", () => {
     const { plugin } = createPlugin({ verdict: "allow" });
     await plugin.setup(context as never);
     const call = {
-      sessionID: "session-1", agent: "explore", messageID: "msg-1",
-      id: "call-1", tool: "shell", input: { command: "ls" },
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
     };
     await hooks["tool.execute.before"]?.(call);
-    await expect(hooks["tool.execute.after"]?.({
-      ...call, input: { command: "rm -rf /" }, status: "completed",
-    })).rejects.toThrow("Tool input changed after auto-review approval.");
+    await expect(
+      hooks["tool.execute.after"]?.({
+        ...call,
+        input: { command: "rm -rf /" },
+        status: "completed",
+      }),
+    ).rejects.toThrow("Tool input changed after auto-review approval.");
   });
 
   it("blocks a tool call when all-tools review escalates", async () => {
