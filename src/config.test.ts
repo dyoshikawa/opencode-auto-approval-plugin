@@ -85,17 +85,26 @@ describe("parsePluginConfiguration", () => {
   });
 
   it("only enables reviewer cleanup on explicit V2 OpenCode opt-in", () => {
-    expect(parsePluginConfiguration({
-      options: { reviewer: { agent: { cleanupSessions: true } } },
-    }).reviewer.agent).toMatchObject({
+    expect(
+      parsePluginConfiguration({
+        options: { reviewer: { agent: { cleanupSessions: true } } },
+      }).reviewer.agent,
+    ).toMatchObject({
       runtime: "opencode",
       cleanupSessions: true,
     });
-    expect(() => parsePluginConfiguration({
-      options: { reviewer: { agent: {
-        runtime: "codex-sdk", cleanupSessions: true,
-      } } },
-    })).toThrow('reviewer.agent.cleanupSessions requires reviewer.agent.runtime "opencode".');
+    expect(() =>
+      parsePluginConfiguration({
+        options: {
+          reviewer: {
+            agent: {
+              runtime: "codex-sdk",
+              cleanupSessions: true,
+            },
+          },
+        },
+      }),
+    ).toThrow('reviewer.agent.cleanupSessions requires reviewer.agent.runtime "opencode".');
   });
 
   describe("agent runtime", () => {
