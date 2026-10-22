@@ -340,7 +340,7 @@ export function parsePluginConfiguration(input: {
  * limit, so instructions that leave no room for the operation would make every
  * review too large. That fails at startup instead of escalating every call.
  */
-function instructionsTooLarge(size: string, limit: string): never {
+function instructionsTooLarge({ size, limit }: { size: string; limit: string }): never {
   throw new Error(
     `Invalid auto-approval plugin options: reviewer.instructions (${size}) leave no room for the operation within ${limit}.`,
   );
@@ -351,18 +351,28 @@ function assertInstructionsFit(configuration: PluginConfiguration): void {
   if (instructions === undefined) return;
   const bytes = Buffer.byteLength(instructions, "utf8");
   if ((backend === "agent" || decision?.onOversize === "agent") && bytes >= agent.maxInputBytes) {
-    instructionsTooLarge(`${bytes} bytes`, `reviewer.agent.maxInputBytes (${agent.maxInputBytes})`);
+    instructionsTooLarge({
+      size: `${bytes.toLocaleString("en-US")} bytes`,
+      limit: `reviewer.agent.maxInputBytes (${agent.maxInputBytes.toLocaleString("en-US")})`,
+    });
   }
   if (chat !== undefined && bytes >= chat.maxInputBytes) {
-    instructionsTooLarge(`${bytes} bytes`, `reviewer.chat.maxInputBytes (${chat.maxInputBytes})`);
+    instructionsTooLarge({
+      size: `${bytes.toLocaleString("en-US")} bytes`,
+      limit: `reviewer.chat.maxInputBytes (${chat.maxInputBytes.toLocaleString("en-US")})`,
+    });
   }
   if (decision !== undefined) {
     const tokens = estimateTokens(instructions);
     const budget = decision.longContext?.maxStateTokens ?? decision.maxStateTokens;
     const name =
       decision.longContext === undefined ? "maxStateTokens" : "longContext.maxStateTokens";
-    if (tokens >= budget)
-      instructionsTooLarge(`about ${tokens} tokens`, `reviewer.decision.${name} (${budget})`);
+    if (tokens >= budget) {
+      instructionsTooLarge({
+        size: `about ${tokens.toLocaleString("en-US")} tokens`,
+        limit: `reviewer.decision.${name} (${budget.toLocaleString("en-US")})`,
+      });
+    }
   }
 }
 

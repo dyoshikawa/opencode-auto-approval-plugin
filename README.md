@@ -518,7 +518,10 @@ string.
   `agent` and `chat` reviewers' `maxInputBytes` (UTF-8 bytes), and the decision model's
   `maxStateTokens` (or `longContext.maxStateTokens`). Very long instructions leave less room for
   the operation, so more reviews end up too large; instructions that would fill a limit in use
-  make the plugin fail at startup.
+  make the plugin fail at startup. Near the top of the range, raise `maxInputBytes` as well (the
+  default is 200,000 bytes, and a Japanese character takes three). With `longContext`, instructions
+  larger than `maxStateTokens` send every review with long context and its stricter allow
+  threshold.
 - Instructions can widen what is approved automatically, so set them only in configuration you
   trust, like `baseURL`, `minAllowProbability` and `longContext` — not in a repository's `opencode.json` you have
   not reviewed.

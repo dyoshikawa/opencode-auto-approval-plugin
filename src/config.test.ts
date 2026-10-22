@@ -368,7 +368,7 @@ describe("parsePluginConfiguration", () => {
           env: {},
         }),
       ).toThrow(
-        "reviewer.instructions (210000 bytes) leave no room for the operation within reviewer.agent.maxInputBytes (200000)",
+        "reviewer.instructions (210,000 bytes) leave no room for the operation within reviewer.agent.maxInputBytes (200,000)",
       );
     });
 
@@ -385,7 +385,7 @@ describe("parsePluginConfiguration", () => {
           },
           env: {},
         }),
-      ).toThrow("within reviewer.chat.maxInputBytes (5000)");
+      ).toThrow("within reviewer.chat.maxInputBytes (5,000)");
     });
 
     it("rejects instructions that fill the decision model's budget", () => {
@@ -401,7 +401,7 @@ describe("parsePluginConfiguration", () => {
           options: { reviewer: { ...reviewer, decision: { provider: "typesafe" } } },
           env,
         }),
-      ).toThrow("within reviewer.decision.maxStateTokens (28000)");
+      ).toThrow("within reviewer.decision.maxStateTokens (28,000)");
       expect(
         parsePluginConfiguration({
           options: {
