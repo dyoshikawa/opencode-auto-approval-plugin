@@ -441,25 +441,30 @@ describe("V2 plugin (opencode 2.x)", () => {
       tool: "shell",
       input: { command: "ls -la" },
     };
-    const native = () =>
-      askEvent({
-        sessionID: "session-1",
-        agent: "explore",
-        action: "shell",
-        source: { type: "tool", messageID: "msg-1", id: "call-1" },
-      });
-    const premature = native();
+    const premature = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
     await hooks["permission.evaluate"]?.(premature);
     expect(premature.effect).toBe("ask");
 
     await hooks["tool.execute.before"]?.(call);
-    const permitted = native();
+    const permitted = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
     await hooks["permission.evaluate"]?.(permitted);
     expect(permitted.effect).toBe("allow");
     expect(review).toHaveBeenCalledTimes(1);
 
     await hooks["tool.execute.after"]?.({ ...call, status: "completed", result: {} });
-    const late = native();
+    const late = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
     await hooks["permission.evaluate"]?.(late);
     expect(late.effect).toBe("ask");
   });
