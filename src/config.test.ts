@@ -321,11 +321,95 @@ describe("parsePluginConfiguration", () => {
       expect(
         parsePluginConfiguration({
           options: {
-            reviewer: { instructions: "x".repeat(200_000), maxInstructionsChars: 200_000 },
+            reviewer: {
+              instructions: "x".repeat(200_000),
+              maxInstructionsChars: 200_000,
+              agent: { maxInputBytes: 400_000 },
+            },
           },
           env: {},
         }).reviewer.instructions,
       ).toHaveLength(200_000);
+    });
+
+    it("accepts maxInstructionsChars at the default without instructions", () => {
+      expect(
+        parsePluginConfiguration({
+          options: { reviewer: { maxInstructionsChars: 4_000 } },
+          env: {},
+        }).reviewer,
+      ).not.toHaveProperty("instructions");
+    });
+
+    it("suggests maxInstructionsChars only below its ceiling", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { instructions: "x".repeat(4_001) } },
+          env: {},
+        }),
+      ).toThrow("raise reviewer.maxInstructionsChars (up to 200000) to allow more.");
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: { instructions: "x".repeat(200_001), maxInstructionsChars: 200_000 },
+          },
+          env: {},
+        }),
+      ).toThrow(/must be at most 200000 characters\.$/);
+    });
+
+    it("rejects instructions that fill the agent reviewer's maxInputBytes", () => {
+      // 70,000 Japanese characters are 210,000 UTF-8 bytes.
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: { instructions: "日".repeat(70_000), maxInstructionsChars: 70_000 },
+          },
+          env: {},
+        }),
+      ).toThrow(
+        "reviewer.instructions (210000 bytes) leave no room for the operation within reviewer.agent.maxInputBytes (200000)",
+      );
+    });
+
+    it("rejects instructions that fill the chat reviewer's maxInputBytes", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: {
+            reviewer: {
+              backend: "chat",
+              instructions: "x".repeat(5_000),
+              maxInstructionsChars: 5_000,
+              chat: { apiKey: "test-key", model: "test-model", maxInputBytes: 5_000 },
+            },
+          },
+          env: {},
+        }),
+      ).toThrow("within reviewer.chat.maxInputBytes (5000)");
+    });
+
+    it("rejects instructions that fill the decision model's budget", () => {
+      const env = { TYPESAFE_API_KEY: "test-key" };
+      // About 32,000 tokens.
+      const reviewer = {
+        backend: "decision",
+        instructions: "x".repeat(80_000),
+        maxInstructionsChars: 80_000,
+      };
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { ...reviewer, decision: { provider: "typesafe" } } },
+          env,
+        }),
+      ).toThrow("within reviewer.decision.maxStateTokens (28000)");
+      expect(
+        parsePluginConfiguration({
+          options: {
+            reviewer: { ...reviewer, decision: { provider: "typesafe", longContext: true } },
+          },
+          env,
+        }).reviewer.instructions,
+      ).toHaveLength(80_000);
     });
   });
 

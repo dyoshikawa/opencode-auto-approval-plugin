@@ -514,9 +514,11 @@ string.
   `permission` on 1.x) when a tool must always be allowed or denied. Explicit OpenCode `deny` rules still always win.
 - Blank entries are ignored, and the joined text may be at most 4,000 characters by default. Set
   `reviewer.maxInstructionsChars` (4,000–200,000) to allow a longer policy. The instructions are
-  sent, and billed, with every review, and they count toward each backend's size limit: the
-  `agent` and `chat` reviewers' `maxInputBytes`, and the decision model's per-request token limit,
-  so very long instructions leave less room for the operation and can make reviews too large.
+  sent, and billed, with every review, and they count toward each reviewer's size limit: the
+  `agent` and `chat` reviewers' `maxInputBytes` (UTF-8 bytes), and the decision model's
+  `maxStateTokens` (or `longContext.maxStateTokens`). Very long instructions leave less room for
+  the operation, so more reviews end up too large; instructions that would fill a limit in use
+  make the plugin fail at startup.
 - Instructions can widen what is approved automatically, so set them only in configuration you
   trust, like `baseURL`, `minAllowProbability` and `longContext` — not in a repository's `opencode.json` you have
   not reviewed.
