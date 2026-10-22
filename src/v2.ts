@@ -37,7 +37,9 @@ function grantKey(input: { sessionID: string; messageID: string; id: string }): 
 }
 
 function inputDigest(input: unknown): string {
-  return createHash("sha256").update(JSON.stringify(input) ?? "undefined").digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify(input) ?? "undefined")
+    .digest("hex");
 }
 
 /** V2 model references use `id`; the plugin configuration keeps V1's `modelID`. */
