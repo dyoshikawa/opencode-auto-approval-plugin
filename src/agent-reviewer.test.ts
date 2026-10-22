@@ -92,7 +92,10 @@ describe("AgentReviewer", () => {
     });
 
     expect(client.sessions).toEqual([
-      { parentID: "main-session", model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" } },
+      {
+        parentID: "main-session",
+        model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
+      },
     ]);
   });
 
@@ -217,7 +220,9 @@ describe("AgentReviewer", () => {
 
   it("keeps original error when opt-in removal fails", async () => {
     const client = clientWithResponse({ response: "No verdict." });
-    client.remove = async () => { throw new Error("cleanup failed"); };
+    client.remove = async () => {
+      throw new Error("cleanup failed");
+    };
     const reviewer = new AgentReviewer({
       client,
       configuration: parsePluginConfiguration({
