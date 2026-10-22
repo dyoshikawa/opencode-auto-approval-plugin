@@ -44,6 +44,7 @@ describe("parsePluginConfiguration", () => {
   it("uses the safe on-ask defaults", () => {
     expect(parsePluginConfiguration({ options: {}, env: {} })).toEqual({
       mode: "on-ask",
+      allToolsNativeAsks: "preserve",
       auditLog: { enabled: false, includeCommand: false },
       conversation: { enabled: false, includeAssistant: false },
       reviewer: {
@@ -68,6 +69,7 @@ describe("parsePluginConfiguration", () => {
       }),
     ).toEqual({
       mode: "all-tools",
+      allToolsNativeAsks: "preserve",
       auditLog: { enabled: false, includeCommand: false },
       conversation: { enabled: false, includeAssistant: false },
       reviewer: {
@@ -81,6 +83,17 @@ describe("parsePluginConfiguration", () => {
         recordUsage: true,
       },
     });
+  });
+
+  it("requires explicit opt-in to review native asks in all-tools V2", () => {
+    expect(
+      parsePluginConfiguration({
+        options: { mode: "all-tools", allToolsNativeAsks: "review" },
+      }).allToolsNativeAsks,
+    ).toBe("review");
+    expect(() =>
+      parsePluginConfiguration({ options: { allToolsNativeAsks: "invalid" } }),
+    ).toThrow("Invalid auto-approval plugin options");
   });
 
   describe("agent runtime", () => {
