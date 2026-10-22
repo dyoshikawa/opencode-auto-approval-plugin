@@ -25,6 +25,7 @@ function createContext(input: { options?: Record<string, unknown> } = {}) {
       },
     ]),
     interrupt: vi.fn(async () => ({})),
+    remove: vi.fn(async () => ({})),
     get: vi.fn(async () => ({ id: "session-1", model: { providerID: "openai", id: "gpt-5.6" } })),
     hook: vi.fn(async (name: string, callback: Hook) => {
       hooks[`session.${name}`] = callback;
@@ -545,6 +546,24 @@ describe("V2 session client", () => {
     await expect(client.prompt({ sessionID: "review-session", text: "" })).rejects.toThrow(
       "Reviewer session failed: no model",
     );
+  });
+
+  it("associates V2 reviewer sessions with their parent and deletes when requested", async () => {
+    const { context, session } = createContext();
+    const client = createV2SessionClient(context as never);
+    await client.create({ parentID: "main-session" });
+    expect(session.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentID: "main-session",
+        agent: "auto-approval-reviewer",
+        permissions: expect.arrayContaining([
+          { action: "*", resource: "*", effect: "deny" },
+          { action: "read", resource: "*", effect: "allow" },
+        ]),
+      }),
+    );
+    await client.remove?.({ sessionID: "review-session" });
+    expect(session.remove).toHaveBeenCalledWith({ sessionID: "review-session" });
   });
 
   it("interrupts the session on abort", async () => {
