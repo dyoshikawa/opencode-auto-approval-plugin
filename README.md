@@ -643,13 +643,15 @@ native asks with `allToolsNativeAsks: "review"`:
 
 ```jsonc
 {
-  "plugins": [{
-    "package": "opencode-auto-approval-plugin",
-    "options": {
-      "mode": "all-tools",
-      "allToolsNativeAsks": "review"
-    }
-  }]
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "mode": "all-tools",
+        "allToolsNativeAsks": "review",
+      },
+    },
+  ],
 }
 ```
 
