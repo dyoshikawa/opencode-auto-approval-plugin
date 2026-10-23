@@ -526,6 +526,37 @@ string.
   trust, like `baseURL`, `minAllowProbability` and `longContext` — not in a repository's `opencode.json` you have
   not reviewed.
 
+#### Replacing the built-in policy
+
+The built-in policy leans toward asking a human: it escalates whenever the user's intent is
+unknown or the operation is ambiguous, and your instructions can only argue against it. Set
+`reviewer.replaceDefaultPolicy` to `true` to make your instructions the whole policy instead.
+
+```jsonc
+{
+  "reviewer": {
+    "replaceDefaultPolicy": true,
+    "instructions": [
+      "Allow routine development work: builds, tests, linters, package installs, and git commits and pushes to branches other than main.",
+      "Deny anything that deletes files outside the workspace or sends secrets over the network.",
+      "Escalate everything else.",
+    ],
+  },
+}
+```
+
+- This drops the built-in rules about when to allow, deny or escalate — "decide whether it is safe
+  and within the user's intent" and "if userIntent is null, escalate unless the operation is
+  clearly harmless" — from every backend, and the `decision` backend's verdict criteria become
+  "your policy allows / forbids / wants a human or does not decide". An operation your policy does
+  not decide is escalated.
+- What stays: the answer format, the review check, the rule that operation data is untrusted and
+  its boundary, the rules on whose conversation turns can authorize an operation, and the decision
+  model's `minAllowProbability`.
+- It needs `reviewer.instructions`; the plugin fails at startup without them.
+- Your instructions are then the only thing standing between the agent and an automatic approval,
+  so write down what must still go to a human, and keep this option in configuration you trust.
+
 ### Audit log (opt-in)
 
 These options work with both plugin API generations and every reviewer backend. Add them to

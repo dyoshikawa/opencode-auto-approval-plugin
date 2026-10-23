@@ -67,6 +67,7 @@ export class ChatReviewer implements Reviewer {
   readonly #configuration: ChatConfiguration;
   readonly #timeoutMs: number;
   readonly #instructions: string | undefined;
+  readonly #replaceDefaultPolicy: boolean;
   readonly #fetch: Fetch;
   readonly #recordUsage: UsageRecorder | undefined;
   readonly #project: string;
@@ -84,6 +85,7 @@ export class ChatReviewer implements Reviewer {
     this.#configuration = chat;
     this.#timeoutMs = input.configuration.reviewer.timeoutMs;
     this.#instructions = input.configuration.reviewer.instructions;
+    this.#replaceDefaultPolicy = input.configuration.reviewer.replaceDefaultPolicy === true;
     this.#fetch = input.fetch ?? globalThis.fetch;
     this.#recordUsage = input.recordUsage;
     this.#project = input.project ?? "";
@@ -118,6 +120,7 @@ export class ChatReviewer implements Reviewer {
     const prompt = reviewerPrompt({
       request: input.request,
       instructions: this.#instructions,
+      replaceDefaultPolicy: this.#replaceDefaultPolicy,
       check,
     });
     const { model, maxInputBytes } = this.#configuration;

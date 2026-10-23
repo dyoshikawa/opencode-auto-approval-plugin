@@ -73,6 +73,7 @@ export function agentReviewPrompt(input: {
   const text = reviewerPrompt({
     request: input.request,
     instructions: input.configuration.reviewer.instructions,
+    replaceDefaultPolicy: input.configuration.reviewer.replaceDefaultPolicy,
     check,
   });
   const { maxInputBytes } = input.configuration.reviewer.agent;

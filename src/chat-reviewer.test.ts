@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ChatReviewer } from "./chat-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
-import { OversizeError, type ReviewRequest } from "./reviewer.js";
+import { OversizeError, type ReviewRequest, userPolicyPreamble } from "./reviewer.js";
 import type { UsageRecord } from "./usage.js";
 
 const request: ReviewRequest = {
@@ -33,6 +33,7 @@ function chatReviewer(input: {
   response: () => Promise<Response>;
   maxInputBytes?: number;
   instructions?: string[];
+  replaceDefaultPolicy?: boolean;
 }) {
   const records: UsageRecord[] = [];
   const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
@@ -53,6 +54,7 @@ function chatReviewer(input: {
         reviewer: {
           backend: "chat",
           instructions: input.instructions,
+          replaceDefaultPolicy: input.replaceDefaultPolicy,
           chat: {
             baseURL: "https://openrouter.ai/api/v1/",
             apiKey: "or-key",
@@ -121,6 +123,20 @@ describe("ChatReviewer", () => {
 
     const prompt: string = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).messages[1].content;
     expect(prompt.indexOf("`pnpm test` is always safe.")).toBeLessThan(prompt.indexOf("BEGIN ---"));
+  });
+
+  it("replaces the built-in policy when replaceDefaultPolicy is set", async () => {
+    const { reviewer, fetch } = chatReviewer({
+      instructions: ["Allow `git push` to feature branches."],
+      replaceDefaultPolicy: true,
+      response: async () => completion({ content: '{"verdict":"allow","reason":"ok"}' }),
+    });
+
+    await reviewer.review(request);
+
+    const prompt: string = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).messages[1].content;
+    expect(prompt).toContain(`${userPolicyPreamble}\nAllow \`git push\` to feature branches.`);
+    expect(prompt).not.toContain("If userIntent is null");
   });
 
   it("does not send an operation over its character limit", async () => {
