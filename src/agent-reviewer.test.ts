@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { AgentReviewer } from "./agent-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
-import { type ReviewSessionClient, userInstructionsPreamble } from "./reviewer.js";
+import {
+  type ReviewSessionClient,
+  userInstructionsPreamble,
+  userPolicyPreamble,
+} from "./reviewer.js";
 
 type ReviewPrompt = Parameters<ReviewSessionClient["prompt"]>[0];
 type ReviewSessionOptions = Parameters<ReviewSessionClient["create"]>[0];
@@ -148,6 +152,30 @@ describe("AgentReviewer", () => {
     expect(instructions).toBeGreaterThan(-1);
     expect(instructions).toBeLessThan(prompt.indexOf("Return JSON only"));
     expect(instructions).toBeLessThan(prompt.search(/--- UNTRUSTED_OPERATION_[\da-f-]+ BEGIN ---/));
+  });
+
+  it("replaces the built-in policy when replaceDefaultPolicy is set", async () => {
+    const client = clientWithResponse({ response: '{"verdict":"allow","reason":"policy"}' });
+    const reviewer = new AgentReviewer({
+      client,
+      configuration: parsePluginConfiguration({
+        options: {
+          reviewer: { instructions: ["Allow `pnpm build`."], replaceDefaultPolicy: true },
+        },
+      }),
+    });
+
+    await reviewer.review({
+      source: "permission-request",
+      sessionID: "main-session",
+      action: "bash",
+      resource: { command: "pnpm build" },
+    });
+
+    const prompt = client.prompts[0]?.text ?? "";
+    expect(prompt).toContain(`${userPolicyPreamble}\nAllow \`pnpm build\`.`);
+    expect(prompt).not.toContain(userInstructionsPreamble);
+    expect(prompt).not.toContain("If userIntent is null");
   });
 
   it("adds no instruction block when none is configured", async () => {
