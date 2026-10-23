@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { CodexOptions, ThreadOptions, TurnOptions } from "@openai/codex-sdk";
@@ -7,6 +9,13 @@ import { CodexReviewer, type CreateCodex, loadCodex } from "./codex-reviewer.js"
 import { parsePluginConfiguration } from "./config.js";
 import { OversizeError, type ReviewRequest } from "./reviewer.js";
 import type { UsageRecord } from "./usage.js";
+
+/** A fresh directory under ./tmp/tests/projects, symlinks resolved (macOS's tmp dirs are symlinked). */
+function testDirectory(): string {
+  const path = join(process.cwd(), "tmp", "tests", "projects", randomUUID());
+  mkdirSync(path, { recursive: true });
+  return realpathSync(path);
+}
 
 const request: ReviewRequest = {
   source: "permission-request",
@@ -87,6 +96,11 @@ describe("CodexReviewer", () => {
     expect(codex.codex).toEqual([
       {
         config: expect.objectContaining({ project_doc_max_bytes: 0 }),
+        // The project's .codex/config.toml (and its MCP servers) must not load.
+        // /work/project does not exist, so no symlink-resolved entries are added.
+        configOverrides: [
+          'projects={ "/work/project" = { trust_level = "untrusted" }, "/work" = { trust_level = "untrusted" }, "/" = { trust_level = "untrusted" } }',
+        ],
       },
     ]);
     expect(codex.threads).toEqual([
@@ -115,6 +129,36 @@ describe("CodexReviewer", () => {
         costUSD: null,
       }),
     ]);
+  });
+
+  it("quotes every untrusted directory, dots included, and covers the resolved path", async () => {
+    const root = testDirectory();
+    try {
+      const real = join(root, "real.repo\x7f");
+      mkdirSync(real);
+      const link = join(root, "link");
+      symlinkSync(real, link);
+      const codex = fakeCodex();
+      const reviewer = new CodexReviewer({
+        configuration: configuration(),
+        directory: link,
+        loadCodex: async () => codex,
+      });
+
+      await reviewer.review(request);
+
+      const override = codex.codex[0]?.configOverrides?.[0] ?? "";
+      expect(override).toMatch(/^projects=\{ .* \}$/);
+      for (const path of [link, real, root, "/"]) {
+        const key = JSON.stringify(path).replace("\x7f", "\\u007F");
+        expect(override).toContain(`${key} = { trust_level = "untrusted" }`);
+      }
+      // TOML does not allow a raw DEL in a basic string.
+      expect(override).not.toContain("\x7f");
+      expect(codex.threads[0]?.workingDirectory).toBe(link);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("leaves the model to Codex when none is configured", async () => {
@@ -214,6 +258,32 @@ describe("loadCodex", () => {
     await expect(
       loadCodex({ sdkPath: join(process.cwd(), "node_modules", "@openai", "codex-sdk") }),
     ).resolves.toBeTypeOf("function");
+  });
+
+  it("refuses a configured SDK older than the first one with configOverrides", async () => {
+    const root = testDirectory();
+    try {
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ name: "@openai/codex-sdk", version: "0.162.9", main: "index.js" }),
+      );
+      writeFileSync(join(root, "index.js"), "export class Codex {}\n");
+      await expect(loadCodex({ sdkPath: root })).rejects.toThrow(
+        "@openai/codex-sdk 0.162.9 from reviewer.agent.codexSdk.path is older than the required 0.163.0.",
+      );
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ name: "@openai/codex-sdk", main: "index.js" }),
+      );
+      await expect(loadCodex({ sdkPath: root })).rejects.toThrow("(no version)");
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ name: "@openai/codex-sdk", version: "0.164.0-alpha.1", main: "index.js" }),
+      );
+      await expect(loadCodex({ sdkPath: root })).resolves.toBeTypeOf("function");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("names the option in the error for a wrong directory", async () => {

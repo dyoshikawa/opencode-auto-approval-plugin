@@ -1,3 +1,6 @@
+import { realpathSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+
 import type { CodexOptions, RunResult, ThreadOptions, TurnOptions } from "@openai/codex-sdk";
 
 import { agentReviewPrompt } from "./agent-reviewer.js";
@@ -13,6 +16,8 @@ import { importSdk } from "./sdk-loader.js";
 import type { UsageRecorder } from "./usage.js";
 
 const sdkPackage = "@openai/codex-sdk";
+/** The first SDK with `configOverrides`, which keeps the project's Codex config out. */
+const minimumSdkVersion = "0.163.0";
 
 /** The subset of the SDK's `Codex` class the reviewer uses. */
 type CodexClient = {
@@ -29,10 +34,10 @@ const codexReviewerInstructions =
 /**
  * The agent reviewer on Codex through the Codex SDK. Codex inspects the
  * workspace through shell commands, so the session runs in the read-only
- * sandbox without network access, ignores the project's AGENTS.md, and never
- * asks for approval: nobody is there to answer, and an approved request could
- * run a command outside the read-only sandbox. A command the sandbox blocks
- * simply fails.
+ * sandbox without network access, ignores the project's AGENTS.md and
+ * `.codex/config.toml`, and never asks for approval: nobody is there to
+ * answer, and an approved request could run a command outside the read-only
+ * sandbox. A command the sandbox blocks simply fails.
  */
 export class CodexReviewer implements Reviewer {
   readonly #configuration: PluginConfiguration;
@@ -98,6 +103,9 @@ export class CodexReviewer implements Reviewer {
         // The project's AGENTS.md is repository content, not the user's policy.
         project_doc_max_bytes: 0,
       },
+      // So is its `.codex/config.toml`, which could add MCP servers that run
+      // outside the read-only sandbox. See `untrustedProjectsOverride`.
+      configOverrides: [untrustedProjectsOverride(this.#directory)],
     });
     const thread = codex.startThread({
       ...(this.#model === undefined ? {} : { model: this.#model }),
@@ -166,6 +174,42 @@ export class CodexReviewer implements Reviewer {
   }
 }
 
+/**
+ * A raw `--config` override that marks the reviewed directory and every
+ * directory above it as untrusted, so Codex loads no project config layer
+ * (`.codex/config.toml`) for the review even when the user trusted the project
+ * in Codex. Codex takes a directory's trust from its own `projects` entry
+ * before the entry of its repository root (the main checkout for a worktree),
+ * so every directory whose `.codex/config.toml` it may load gets an entry. The
+ * symlink-resolved path is covered too in case Codex resolves the working
+ * directory. The SDK's structured `config` would join a path into a dotted key
+ * unquoted, which breaks on a `.` in the path, so the table is written inline
+ * with every key quoted. JSON string escapes are TOML basic string escapes,
+ * except that TOML also needs DEL escaped; a lone surrogate in a path fails to
+ * parse, and Codex then fails to start rather than loading the project config.
+ */
+function untrustedProjectsOverride(directory: string): string {
+  const directories = new Set<string>();
+  const add = (start: string) => {
+    for (let current = start; ; current = dirname(current)) {
+      directories.add(current);
+      if (dirname(current) === current) break;
+    }
+  };
+  const absolute = resolve(directory);
+  add(absolute);
+  try {
+    add(realpathSync(absolute));
+  } catch {
+    // A directory that cannot be resolved has no other path to cover.
+  }
+  const entries = [...directories].map(
+    (path) =>
+      `${JSON.stringify(path).replaceAll("\x7f", "\\u007F")} = { trust_level = "untrusted" }`,
+  );
+  return `projects={ ${entries.join(", ")} }`;
+}
+
 type Usage = { inputTokens: number | null; outputTokens: number | null };
 
 /** Imports the SDK's `Codex` class; see `importSdk`. */
@@ -175,6 +219,7 @@ export async function loadCodex(input: { sdkPath?: string }): Promise<CreateCode
     option: "reviewer.agent.codexSdk.path",
     ...input,
     importInstalled: () => import("@openai/codex-sdk"),
+    minimumVersion: minimumSdkVersion,
   });
   const Codex = module.Codex;
   if (typeof Codex !== "function") {
