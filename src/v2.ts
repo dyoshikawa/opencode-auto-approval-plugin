@@ -65,10 +65,11 @@ const reviewerPermissions = [
 
 export function createV2SessionClient(context: Context): ReviewSessionClient {
   return {
-    create: async ({ model }) => {
+    create: async ({ model, parentID }) => {
       const session = await context.session.create({
         title: "Auto-approval review",
         agent: reviewerAgentName,
+        ...(parentID ? { parentID } : {}),
         // Repeated on the session so the agent staying read-only does not
         // depend on nothing else redefining it.
         permissions: [...reviewerPermissions],
@@ -91,6 +92,7 @@ export function createV2SessionClient(context: Context): ReviewSessionClient {
         .join("\n");
     },
     abort: ({ sessionID }) => context.session.interrupt({ sessionID }),
+    remove: ({ sessionID }) => context.session.remove({ sessionID }),
   };
 }
 

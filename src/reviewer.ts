@@ -39,11 +39,13 @@ export type ReviewSessionClient = {
    * one the whole session must use; a transport that can only choose a model
    * per prompt remembers it here.
    */
-  create(input: { model?: ModelReference }): Promise<{ sessionID: string }>;
+  create(input: { model?: ModelReference; parentID?: string }): Promise<{ sessionID: string }>;
   /** Sends the review prompt and resolves with the reviewer's final reply text. */
   prompt(input: { sessionID: string; text: string }): Promise<string>;
   /** Best-effort cancellation after a timeout or failure. */
   abort(input: { sessionID: string }): Promise<unknown>;
+  /** V2 OpenCode only: optionally remove a finished reviewer session. */
+  remove?(input: { sessionID: string }): Promise<unknown>;
 };
 
 /** A review backend: the agent session or the decision model API. */

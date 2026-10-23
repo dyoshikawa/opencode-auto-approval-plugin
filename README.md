@@ -121,6 +121,27 @@ remains entirely in OpenCode.
 }
 ```
 
+### Reviewer session lifecycle (OpenCode V2)
+
+On V2, reviewer sessions are linked to their originating session instead of
+cluttering the top-level session list. The reviewer transcript remains available
+by default for auditing the decision.
+
+Set `reviewer.agent.cleanupSessions: true` to delete reviewer sessions after a
+decision. Deletion is best-effort and **never delays** the verdict or timeout.
+This applies only to the OpenCode V2 agent runtime; the V1 and external
+Claude/Codex SDK runtimes retain their previous behavior.
+
+```json
+{
+  "reviewer": {
+    "agent": {
+      "cleanupSessions": true
+    }
+  }
+}
+```
+
 ### Agent runtimes
 
 `reviewer.agent.runtime` chooses where the `agent` reviewer runs. It applies wherever the agent
