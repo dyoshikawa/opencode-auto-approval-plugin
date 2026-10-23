@@ -1,3 +1,5 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { CodexOptions, ThreadOptions, TurnOptions } from "@openai/codex-sdk";
@@ -87,6 +89,10 @@ describe("CodexReviewer", () => {
     expect(codex.codex).toEqual([
       {
         config: expect.objectContaining({ project_doc_max_bytes: 0 }),
+        // The project's .codex/config.toml (and its MCP servers) must not load.
+        configOverrides: [
+          'projects={ "/work/project" = { trust_level = "untrusted" }, "/work" = { trust_level = "untrusted" }, "/" = { trust_level = "untrusted" } }',
+        ],
       },
     ]);
     expect(codex.threads).toEqual([
@@ -115,6 +121,33 @@ describe("CodexReviewer", () => {
         costUSD: null,
       }),
     ]);
+  });
+
+  it("quotes every untrusted directory, dots included, and covers the resolved path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "codex-reviewer-"));
+    try {
+      const real = join(root, "real.repo");
+      mkdirSync(real);
+      const link = join(root, "link");
+      symlinkSync(real, link);
+      const codex = fakeCodex();
+      const reviewer = new CodexReviewer({
+        configuration: configuration(),
+        directory: link,
+        loadCodex: async () => codex,
+      });
+
+      await reviewer.review(request);
+
+      const override = codex.codex[0]?.configOverrides?.[0] ?? "";
+      expect(override).toMatch(/^projects=\{ .* \}$/);
+      for (const path of [link, real, root, "/"]) {
+        expect(override).toContain(`${JSON.stringify(path)} = { trust_level = "untrusted" }`);
+      }
+      expect(codex.threads[0]?.workingDirectory).toBe(link);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("leaves the model to Codex when none is configured", async () => {
