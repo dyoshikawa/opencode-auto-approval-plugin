@@ -129,6 +129,12 @@ export type PluginConfiguration = {
     timeoutMs: number;
     /** The user's own review policy, added to every review as trusted guidance. */
     instructions?: string;
+    /**
+     * When set, `instructions` replace the built-in review policy (when to
+     * allow, deny or escalate) instead of adding to it. The answer format and
+     * the untrusted-data guard stay.
+     */
+    replaceDefaultPolicy?: true;
     /** Whether decision and chat reviews are appended to the usage log. */
     recordUsage: boolean;
     decision?: DecisionConfiguration;
@@ -284,6 +290,7 @@ const pluginConfigurationSchema = z.object({
       maxInstructionsChars: z.optional(
         z.int().check(z.gte(defaultMaxInstructionsChars), z.lte(maxInstructionsCharsCeiling)),
       ),
+      replaceDefaultPolicy: z.optional(z.boolean()),
       recordUsage: z.optional(z.boolean()),
       // Checked only when the decision backend reads them, so another backend
       // starts whatever they hold. `decisionModel` and `jev` are deprecated.
@@ -327,6 +334,7 @@ export function parsePluginConfiguration(input: {
       agent: agentConfiguration(reviewer),
       timeoutMs: reviewer?.timeoutMs ?? 30_000,
       ...(instructions === undefined ? {} : { instructions }),
+      ...replaceDefaultPolicyOption({ enabled: reviewer?.replaceDefaultPolicy, instructions }),
       recordUsage: reviewer?.recordUsage ?? true,
       ...(decision === undefined ? {} : { decision }),
       ...(backend === "chat" || decision?.onOversize === "chat"
@@ -336,6 +344,21 @@ export function parsePluginConfiguration(input: {
   };
   assertInstructionsFit(configuration);
   return configuration;
+}
+
+function replaceDefaultPolicyOption(input: {
+  enabled: boolean | undefined;
+  instructions: string | undefined;
+}): { replaceDefaultPolicy?: true } {
+  if (input.enabled !== true) return {};
+  if (input.instructions === undefined) {
+    // Without a policy of its own the reviewer would be told nothing about
+    // when to allow, deny or escalate.
+    throw new Error(
+      "Invalid auto-approval plugin options: reviewer.replaceDefaultPolicy needs reviewer.instructions to replace the built-in policy with.",
+    );
+  }
+  return { replaceDefaultPolicy: true };
 }
 
 /**
