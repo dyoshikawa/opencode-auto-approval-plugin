@@ -425,6 +425,211 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(hooks["tool.execute.before"]).toBeDefined();
   });
 
+  it("only bridges native asks with explicit V2 opt-in", async () => {
+    const { context, hooks } = createContext({
+      options: { mode: "all-tools", allToolsNativeAsks: "review" },
+    });
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    expect(hooks["permission.evaluate"]).toBeDefined();
+    expect(hooks["tool.execute.after"]).toBeDefined();
+
+    const call = {
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls -la" },
+    };
+    const premature = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
+    await hooks["permission.evaluate"]?.(premature);
+    expect(premature.effect).toBe("ask");
+
+    await hooks["tool.execute.before"]?.(call);
+    const permitted = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
+    await hooks["permission.evaluate"]?.(permitted);
+    expect(permitted.effect).toBe("allow");
+    expect(review).toHaveBeenCalledTimes(1);
+
+    await hooks["tool.execute.after"]?.({ ...call, status: "completed", result: {} });
+    const late = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
+    await hooks["permission.evaluate"]?.(late);
+    expect(late.effect).toBe("ask");
+  });
+
+  it("does not grant other sessions, agents or tool calls", async () => {
+    const { context, hooks } = createContext({
+      options: { mode: "all-tools", allToolsNativeAsks: "review" },
+    });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    await hooks["tool.execute.before"]?.({
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
+    });
+    const base = {
+      sessionID: "session-1",
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    };
+    for (const changes of [
+      { sessionID: "elsewhere" },
+      { agent: "build" },
+      { source: { type: "tool", messageID: "msg-2", id: "call-1" } },
+      { source: { type: "tool", messageID: "msg-1", id: "call-2" } },
+      { source: undefined },
+    ]) {
+      const event = askEvent({ ...base, ...changes });
+      await hooks["permission.evaluate"]?.(event);
+      expect(event.effect).toBe("ask");
+    }
+    const valid = askEvent(base);
+    await hooks["permission.evaluate"]?.(valid);
+    expect(valid.effect).toBe("allow");
+  });
+
+  it("reviews a resolved external path separately and blocks denied or escalated requests", async () => {
+    const { context, hooks } = createContext({
+      options: { mode: "all-tools", allToolsNativeAsks: "review" },
+    });
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    await hooks["tool.execute.before"]?.({
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "cat internal-link" },
+    });
+    review.mockResolvedValueOnce({ verdict: "escalate", reason: "outside checkout" });
+    const external = askEvent({
+      agent: "explore",
+      action: "external_directory",
+      resources: ["/private/resolved-target"],
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
+    await hooks["permission.evaluate"]?.(external);
+    expect(review).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        source: "permission-request",
+        action: "external_directory",
+        resource: { resources: ["/private/resolved-target"], metadata: {} },
+      }),
+    );
+    expect(external.effect).toBe("deny");
+
+    const shell = askEvent({
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
+    await hooks["permission.evaluate"]?.(shell);
+    expect(shell.effect).toBe("allow");
+  });
+
+  it("revokes a child's grant when the parent user prompts again", async () => {
+    const { context, hooks, session } = createContext({
+      options: { mode: "all-tools", allToolsNativeAsks: "review" },
+    });
+    session.get.mockImplementation(async (input?: { sessionID: string }) =>
+      input?.sessionID === "child"
+        ? ({ id: "child", parentID: "session-1" } as never)
+        : { id: "session-1", model: { providerID: "openai", id: "gpt-5.6" } },
+    );
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "continue" } });
+    await hooks["tool.execute.before"]?.({
+      sessionID: "child",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
+    });
+    await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "stop" } });
+    const event = askEvent({
+      sessionID: "child",
+      agent: "explore",
+      action: "shell",
+      source: { type: "tool", messageID: "msg-1", id: "call-1" },
+    });
+    await hooks["permission.evaluate"]?.(event);
+    expect(event.effect).toBe("ask");
+  });
+
+  it("expires abandoned native grants after 45 seconds", async () => {
+    const { context, hooks } = createContext({
+      options: { mode: "all-tools", allToolsNativeAsks: "review" },
+    });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    await hooks["tool.execute.before"]?.({
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
+    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 45_001);
+      const event = askEvent({
+        agent: "explore",
+        action: "shell",
+        source: { type: "tool", messageID: "msg-1", id: "call-1" },
+      });
+      await hooks["permission.evaluate"]?.(event);
+      expect(event.effect).toBe("ask");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("detects changed tool input in the post-execution hook", async () => {
+    const { context, hooks } = createContext({
+      options: { mode: "all-tools", allToolsNativeAsks: "review" },
+    });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    const call = {
+      sessionID: "session-1",
+      agent: "explore",
+      messageID: "msg-1",
+      id: "call-1",
+      tool: "shell",
+      input: { command: "ls" },
+    };
+    await hooks["tool.execute.before"]?.(call);
+    expect(() =>
+      hooks["tool.execute.after"]?.({
+        ...call,
+        input: { command: "rm -rf /" },
+        status: "completed",
+      }),
+    ).toThrow("Tool input changed after auto-review approval.");
+  });
+
   it("blocks a tool call when all-tools review escalates", async () => {
     const { context, hooks } = createContext({ options: { mode: "all-tools" } });
     const { plugin } = createPlugin({ verdict: "escalate" });

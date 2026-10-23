@@ -696,6 +696,47 @@ startup so that neither is silently ignored.
 | `reviewer.decisionModel` (v0.5)                  | `reviewer.decision`                               |
 | `backend: "jev"` with `reviewer.jev` (v0.3–v0.4) | `backend: "decision"` with `provider: "typesafe"` |
 
+### Native permission checks in all-tools mode (V2 opt-in)
+
+By default, `all-tools` reviews every tool call **and preserves all native
+OpenCode permission requests**, including mandatory human checkpoints.
+AI approval does not silently replace a configured native `ask`.
+
+OpenCode **V2 only** can opt in to letting the reviewer handle those subsequent
+native asks with `allToolsNativeAsks: "review"`:
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "mode": "all-tools",
+        "allToolsNativeAsks": "review",
+      },
+    },
+  ],
+}
+```
+
+The default is `"preserve"`; it is deliberately **not** enabled during upgrades.
+This option does not change V1 behavior. Reviewers still cannot bypass an
+explicit native `deny`, and an AI `deny` or `escalate` always blocks the
+tool call. Native asks for the same reviewed tool call are scoped to its
+session, agent, message and invocation, automatically expire after 45 seconds,
+and are revoked when the user prompts the root session again.
+
+Only the native action matching the already reviewed tool is granted without
+another review. Extra actions, particularly `external_directory` with its
+resolved path, receive a separate review that can approve or deny the actual
+resources. Failed or escalated extra reviews are denied without an interactive
+prompt. This may cost an additional model call.
+
+Other plugins and core hooks may mutate a tool's input after the reviewer's
+`execute.before` hook. The plugin detects such changes in `execute.after`
+when this option is enabled, but this detection occurs **after execution** and
+is not a hard security boundary. Use only with trusted plugins and hooks.
+
 ### Review modes
 
 | Mode               | Reviewed operations                                           | `allow`                   | `deny`                               | `escalate` / reviewer failure                             |

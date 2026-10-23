@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { Agent, Plugin } from "@opencode/plugin";
 
 import {
@@ -28,6 +30,17 @@ import { reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
 const pluginID = "opencode-auto-approval-plugin";
 
 type Context = Plugin.Context;
+
+/** One reviewed invocation, not a session-wide or agent-wide approval. */
+function grantKey(input: { sessionID: string; messageID: string; id: string }): string {
+  return JSON.stringify([input.sessionID, input.messageID, input.id]);
+}
+
+function inputDigest(input: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(input) ?? "undefined")
+    .digest("hex");
+}
 
 /** V2 model references use `id`; the plugin configuration keeps V1's `modelID`. */
 function toModelRef(model: ModelReference): { providerID: string; id: string } {
@@ -182,9 +195,92 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         return;
       }
 
+      // Opt-in only. By default a native "ask" remains a mandatory human checkpoint.
+      // V1 has no matching permission bridge and intentionally keeps its old semantics.
+      const nativeGrants = new Map<
+        string,
+        {
+          agent: string;
+          tool: string;
+          inputDigest: string;
+          intent: Awaited<ReturnType<typeof tracker.begin>>;
+          expiresAt: number;
+        }
+      >();
+      const grantLifetimeMs = 45_000;
+
+      if (configuration.allToolsNativeAsks === "review") {
+        await context.permission.hook("evaluate", async (event) => {
+          if (event.effect !== "ask" || event.source?.type !== "tool" || isReviewer(event)) return;
+          const key = grantKey({
+            sessionID: event.sessionID,
+            messageID: event.source.messageID,
+            id: event.source.id,
+          });
+          const grant = nativeGrants.get(key);
+          if (!grant || grant.agent !== event.agent) return;
+          if (Date.now() >= grant.expiresAt || grant.intent.changed()) {
+            nativeGrants.delete(key);
+            return;
+          }
+
+          if (event.action === grant.tool) {
+            // The reviewer examined this tool's input. An unrelated permission
+            // action cannot inherit this grant, even with the same call ID.
+            event.effect = "allow";
+            event.message = "Approved by auto-review for this tool invocation.";
+            return;
+          }
+
+          // Resolve extra native asks separately using their ACTUAL resources.
+          // Especially important for external_directory, where symlinks may
+          // resolve outside the path visible in the reviewed tool input.
+          const decision = await reviewForApproval({
+            reviewer,
+            request: {
+              source: "permission-request",
+              sessionID: event.sessionID,
+              action: event.action,
+              resource: { resources: event.resources, metadata: event.metadata },
+              ...(await grant.intent.context()),
+              model: await sessionModel(event.sessionID),
+            },
+          });
+          if (grant.intent.changed()) {
+            nativeGrants.delete(key);
+            return;
+          }
+          if (decision === undefined) {
+            // Fail closed on deny, escalate or reviewer failures, without
+            // surprising the user with an interactive native prompt.
+            event.effect = "deny";
+            event.message = "Additional native permission was not approved by auto-review.";
+            return;
+          }
+          event.effect = "allow";
+          event.message = decision.reason;
+        });
+
+        await context.tool.hook("execute.after", (event) => {
+          const key = grantKey(event);
+          const grant = nativeGrants.get(key);
+          nativeGrants.delete(key);
+          // Other execute.before hooks may run after ours and change input.
+          // This detects such mutations but cannot undo an already run tool.
+          if (grant && grant.inputDigest !== inputDigest(event.input)) {
+            throw new Error("Tool input changed after auto-review approval.");
+          }
+        });
+      }
+
       await context.tool.hook("execute.before", async (event) => {
         if (isReviewer(event)) return;
 
+        const key = grantKey(event);
+        nativeGrants.delete(key);
+        for (const [pending, grant] of nativeGrants) {
+          if (Date.now() >= grant.expiresAt) nativeGrants.delete(pending);
+        }
         const intent = await tracker.begin(event.sessionID);
         await reviewToolCallOrThrow({
           reviewer,
@@ -199,6 +295,15 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         });
         if (intent.changed()) {
           throw new Error("User intent changed during review; human review is required.");
+        }
+        if (configuration.allToolsNativeAsks === "review") {
+          nativeGrants.set(key, {
+            agent: event.agent,
+            tool: event.tool,
+            inputDigest: inputDigest(event.input),
+            intent,
+            expiresAt: Date.now() + grantLifetimeMs,
+          });
         }
       });
     },
