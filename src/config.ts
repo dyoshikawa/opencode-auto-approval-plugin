@@ -329,8 +329,7 @@ export function parsePluginConfiguration(input: {
   const env = input.env ?? process.env;
   const decision = backend === "decision" ? decisionConfiguration({ reviewer, env }) : undefined;
   const configuration: PluginConfiguration = {
-    mode: result.data.mode ?? "on-ask",
-    allToolsNativeAsks: result.data.allToolsNativeAsks ?? "preserve",
+    ...modeConfiguration(result.data),
     auditLog: auditConfiguration(result.data.auditLog),
     conversation: conversationConfiguration(result.data.conversation),
     reviewer: {
@@ -348,6 +347,16 @@ export function parsePluginConfiguration(input: {
   };
   assertInstructionsFit(configuration);
   return configuration;
+}
+
+function modeConfiguration(input: {
+  mode?: PluginConfiguration["mode"];
+  allToolsNativeAsks?: PluginConfiguration["allToolsNativeAsks"];
+}): Pick<PluginConfiguration, "mode" | "allToolsNativeAsks"> {
+  return {
+    mode: input.mode ?? "on-ask",
+    allToolsNativeAsks: input.allToolsNativeAsks ?? "preserve",
+  };
 }
 
 function replaceDefaultPolicyOption(input: {
