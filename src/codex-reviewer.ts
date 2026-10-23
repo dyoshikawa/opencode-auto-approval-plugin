@@ -16,6 +16,8 @@ import { importSdk } from "./sdk-loader.js";
 import type { UsageRecorder } from "./usage.js";
 
 const sdkPackage = "@openai/codex-sdk";
+/** The first SDK with `configOverrides`, which keeps the project's Codex config out. */
+const minimumSdkVersion = "0.163.0";
 
 /** The subset of the SDK's `Codex` class the reviewer uses. */
 type CodexClient = {
@@ -33,9 +35,9 @@ const codexReviewerInstructions =
  * The agent reviewer on Codex through the Codex SDK. Codex inspects the
  * workspace through shell commands, so the session runs in the read-only
  * sandbox without network access, ignores the project's AGENTS.md and
- * `.codex/config.toml`, and never asks for approval: nobody is there to answer, and an approved request could
- * run a command outside the read-only sandbox. A command the sandbox blocks
- * simply fails.
+ * `.codex/config.toml`, and never asks for approval: nobody is there to
+ * answer, and an approved request could run a command outside the read-only
+ * sandbox. A command the sandbox blocks simply fails.
  */
 export class CodexReviewer implements Reviewer {
   readonly #configuration: PluginConfiguration;
@@ -182,7 +184,9 @@ export class CodexReviewer implements Reviewer {
  * symlink-resolved path is covered too in case Codex resolves the working
  * directory. The SDK's structured `config` would join a path into a dotted key
  * unquoted, which breaks on a `.` in the path, so the table is written inline
- * with every key quoted.
+ * with every key quoted. JSON string escapes are TOML basic string escapes,
+ * except that TOML also needs DEL escaped; a lone surrogate in a path fails to
+ * parse, and Codex then fails to start rather than loading the project config.
  */
 function untrustedProjectsOverride(directory: string): string {
   const directories = new Set<string>();
@@ -200,7 +204,8 @@ function untrustedProjectsOverride(directory: string): string {
     // A directory that cannot be resolved has no other path to cover.
   }
   const entries = [...directories].map(
-    (path) => `${JSON.stringify(path)} = { trust_level = "untrusted" }`,
+    (path) =>
+      `${JSON.stringify(path).replaceAll("\x7f", "\\u007F")} = { trust_level = "untrusted" }`,
   );
   return `projects={ ${entries.join(", ")} }`;
 }
@@ -214,6 +219,7 @@ export async function loadCodex(input: { sdkPath?: string }): Promise<CreateCode
     option: "reviewer.agent.codexSdk.path",
     ...input,
     importInstalled: () => import("@openai/codex-sdk"),
+    minimumVersion: minimumSdkVersion,
   });
   const Codex = module.Codex;
   if (typeof Codex !== "function") {

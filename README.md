@@ -171,9 +171,11 @@ reviewer does, including the decision backend's `onOversize: "agent"` fallback.
     without network access or web search, with `approval_policy = "never"` so that no request
     can lift the sandbox (a command the sandbox blocks fails), and without the project's
     `AGENTS.md` or `.codex/config.toml`: the review marks the project directory and every
-    directory above it as untrusted, so a workspace file cannot add MCP servers, hooks or a
-    model provider even when you trusted the project in Codex. Only your own
-    `~/.codex/config.toml` still loads, MCP servers included.
+    directory above it as untrusted, so the project's `.codex/config.toml` cannot add MCP
+    servers or change any other setting even when you trusted the project in Codex. Your own
+    Codex config (`$CODEX_HOME/config.toml`, `~/.codex/config.toml` by default) and any
+    system-managed config still load, MCP servers included. With
+    `reviewer.agent.codexSdk.path`, the SDK there must be 0.163.0 or newer.
 - Both can read files outside the project: Claude Code when its auto-mode classifier judges the
   read safe (measured on 2026-10-17, it read `/etc/hostname` and searched `/home` when asked to),
   Codex because its read-only sandbox can read the whole disk. What it reads reaches the model
