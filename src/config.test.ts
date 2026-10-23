@@ -269,6 +269,39 @@ describe("parsePluginConfiguration", () => {
     );
   });
 
+  describe("reviewer.replaceDefaultPolicy", () => {
+    it("is set only when enabled", () => {
+      const enabled = parsePluginConfiguration({
+        options: { reviewer: { instructions: "Allow builds.", replaceDefaultPolicy: true } },
+        env: {},
+      });
+      expect(enabled.reviewer.replaceDefaultPolicy).toBe(true);
+      const disabled = parsePluginConfiguration({
+        options: { reviewer: { instructions: "Allow builds.", replaceDefaultPolicy: false } },
+        env: {},
+      });
+      expect(disabled.reviewer).not.toHaveProperty("replaceDefaultPolicy");
+    });
+
+    it("rejects replacing the built-in policy without instructions", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { instructions: [" "], replaceDefaultPolicy: true } },
+          env: {},
+        }),
+      ).toThrow("reviewer.replaceDefaultPolicy needs reviewer.instructions");
+    });
+
+    it("rejects a value that is not a boolean", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { instructions: "Allow builds.", replaceDefaultPolicy: "yes" } },
+          env: {},
+        }),
+      ).toThrow("Invalid auto-approval plugin options");
+    });
+  });
+
   describe("reviewer instructions", () => {
     it("accepts a single string", () => {
       expect(

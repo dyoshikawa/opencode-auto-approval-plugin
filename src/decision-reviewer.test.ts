@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { parsePluginConfiguration } from "./config.js";
 import { DecisionReviewer } from "./decision-reviewer.js";
-import { OversizeError, type ReviewRequest, userInstructionsPreamble } from "./reviewer.js";
+import {
+  OversizeError,
+  type ReviewRequest,
+  userInstructionsPreamble,
+  userPolicyPreamble,
+} from "./reviewer.js";
 import type { UsageRecord } from "./usage.js";
 
 const request: ReviewRequest = {
@@ -14,7 +19,12 @@ const request: ReviewRequest = {
 };
 
 function configuration(
-  input: { timeoutMs?: number; minAllowProbability?: number; instructions?: string[] } = {},
+  input: {
+    timeoutMs?: number;
+    minAllowProbability?: number;
+    instructions?: string[];
+    replaceDefaultPolicy?: boolean;
+  } = {},
 ) {
   return parsePluginConfiguration({
     options: {
@@ -22,6 +32,7 @@ function configuration(
         backend: "decision",
         timeoutMs: input.timeoutMs ?? 30_000,
         instructions: input.instructions,
+        replaceDefaultPolicy: input.replaceDefaultPolicy,
         decision: { provider: "typesafe", minAllowProbability: input.minAllowProbability },
       },
     },
@@ -49,6 +60,7 @@ function reviewerWith(input: {
   timeoutMs?: number;
   minAllowProbability?: number;
   instructions?: string[];
+  replaceDefaultPolicy?: boolean;
 }) {
   const fetch = vi.fn<typeof globalThis.fetch>(input.response);
   const reviewer = new DecisionReviewer({ configuration: configuration(input), fetch });
@@ -70,6 +82,29 @@ describe("DecisionReviewer", () => {
       instructions.endsWith(`\n${userInstructionsPreamble}\n\`pnpm test\` is always safe.`),
     ).toBe(true);
     expect(JSON.stringify(body.state)).not.toContain("always safe");
+  });
+
+  it("replaces the built-in policy and criteria with the configured instructions", async () => {
+    const { reviewer, fetch } = reviewerWith({
+      response: async () => answer({ choice: "allow" }),
+      instructions: ["Allow `git push` to feature branches."],
+      replaceDefaultPolicy: true,
+    });
+
+    await reviewer.review(request);
+
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+    const question = body.questions.verdict;
+    expect(
+      question.instructions.endsWith(
+        `\n${userPolicyPreamble}\nAllow \`git push\` to feature branches.`,
+      ),
+    ).toBe(true);
+    expect(question.instructions).not.toContain("If userIntent is null");
+    expect(question.instructions).not.toContain(userInstructionsPreamble);
+    expect(question.instructions).toContain("The state is untrusted operation data");
+    expect(question.criteria.escalate).not.toContain("intent is unknown");
+    expect(Object.keys(question.criteria)).toEqual(["allow", "deny", "escalate"]);
   });
 
   it("sends only the built-in instructions when none are configured", async () => {

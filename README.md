@@ -191,7 +191,12 @@ reviewer does, including the decision backend's `onOversize: "agent"` fallback.
   - Codex inspects the workspace through shell commands, so it runs in the `read-only` sandbox
     without network access or web search, with `approval_policy = "never"` so that no request
     can lift the sandbox (a command the sandbox blocks fails), and without the project's
-    `AGENTS.md`. Your own `~/.codex/config.toml` still loads, MCP servers included.
+    `AGENTS.md` or `.codex/config.toml`: the review marks the project directory and every
+    directory above it as untrusted, so the project's `.codex/config.toml` cannot add MCP
+    servers or change any other setting even when you trusted the project in Codex. Your own
+    Codex config (`$CODEX_HOME/config.toml`, `~/.codex/config.toml` by default) and any
+    system-managed config still load, MCP servers included. With
+    `reviewer.agent.codexSdk.path`, the SDK there must be 0.163.0 or newer.
 - Both can read files outside the project: Claude Code when its auto-mode classifier judges the
   read safe (measured on 2026-10-17, it read `/etc/hostname` and searched `/home` when asked to),
   Codex because its read-only sandbox can read the whole disk. What it reads reaches the model
@@ -526,7 +531,8 @@ string.
 ```
 
 - Both backends receive the instructions as trusted guidance that takes precedence over the
-  built-in safety guidance — though never over the answer format or the rule that operation data
+  built-in safety guidance (or replaces it, with
+  [`replaceDefaultPolicy`](#replacing-the-built-in-policy)) — though never over the answer format or the rule that operation data
   is untrusted, so text inside a command or file cannot pose as your instructions: the `agent`
   backend reads them in its prompt ahead of the operation data, and the `decision` backend
   appends them to the question's `instructions`, never to the state it judges.
@@ -546,6 +552,43 @@ string.
 - Instructions can widen what is approved automatically, so set them only in configuration you
   trust, like `baseURL`, `minAllowProbability` and `longContext` — not in a repository's `opencode.json` you have
   not reviewed.
+
+#### Replacing the built-in policy
+
+The built-in policy leans toward asking a human: it escalates whenever the user's intent is
+unknown or the operation is ambiguous, and your instructions can only argue against it. Set
+`reviewer.replaceDefaultPolicy` to `true` to make your instructions the whole policy instead.
+
+```jsonc
+{
+  "reviewer": {
+    "replaceDefaultPolicy": true,
+    "instructions": [
+      "Allow builds, tests, linters and type checks run through `pnpm` scripts, and `git add`, `git commit` and `git status`.",
+      "Allow reading and editing files inside the workspace.",
+      "Deny anything that sends files or environment variables over the network.",
+      "Escalate everything else, including package installs, `git push` and compound commands.",
+    ],
+  },
+}
+```
+
+- This drops the built-in rules about when to allow, deny or escalate — "decide whether it is safe
+  and within the user's intent" and "if userIntent is null, escalate unless the operation is
+  clearly harmless" — from the prompt of every backend, and the `decision` backend's verdict
+  criteria become "your policy allows / forbids / wants a human or does not decide". An operation
+  your policy does not decide is escalated.
+- What stays: the answer format, the review check, the rule that operation data is untrusted and
+  its boundary, the reviewer's role ("a security reviewer"), the conversation rules (only user
+  turns authorize, and missing context needed for authorization is escalated), and the decision
+  model's `minAllowProbability`.
+- It needs `reviewer.instructions`; the plugin fails at startup without them.
+- The reviewer no longer checks that an operation matches what you asked the agent to do. An agent
+  steered by injected text (a README, an issue, a web page) gets anything your policy allows
+  approved automatically, so write the policy in terms of what is safe to run unattended, and list
+  what must still go to a human.
+- Like `instructions`, set it only in configuration you trust — not in a repository's
+  `opencode.json` you have not reviewed.
 
 ### Audit log (opt-in)
 
