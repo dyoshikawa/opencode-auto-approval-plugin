@@ -48,7 +48,7 @@ describe("parsePluginConfiguration", () => {
       conversation: { enabled: false, includeAssistant: false },
       reviewer: {
         backend: "agent",
-        agent: { runtime: "opencode", maxInputBytes: 200_000 },
+        agent: { runtime: "opencode", maxInputBytes: 200_000, cleanupSessions: false },
         timeoutMs: 30_000,
         recordUsage: true,
       },
@@ -76,11 +76,35 @@ describe("parsePluginConfiguration", () => {
           runtime: "opencode",
           model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
           maxInputBytes: 200_000,
+          cleanupSessions: false,
         },
         timeoutMs: 12_000,
         recordUsage: true,
       },
     });
+  });
+
+  it("only enables reviewer cleanup on explicit V2 OpenCode opt-in", () => {
+    expect(
+      parsePluginConfiguration({
+        options: { reviewer: { agent: { cleanupSessions: true } } },
+      }).reviewer.agent,
+    ).toMatchObject({
+      runtime: "opencode",
+      cleanupSessions: true,
+    });
+    expect(() =>
+      parsePluginConfiguration({
+        options: {
+          reviewer: {
+            agent: {
+              runtime: "codex-sdk",
+              cleanupSessions: true,
+            },
+          },
+        },
+      }),
+    ).toThrow('reviewer.agent.cleanupSessions requires reviewer.agent.runtime "opencode".');
   });
 
   describe("agent runtime", () => {
@@ -1160,6 +1184,7 @@ describe("parsePluginConfiguration", () => {
         runtime: "opencode",
         model: { providerID: "c", modelID: "d" },
         maxInputBytes: 200_000,
+        cleanupSessions: false,
       });
     });
 
@@ -1216,7 +1241,7 @@ describe("parsePluginConfiguration", () => {
         }).reviewer,
       ).toEqual({
         backend: "decision",
-        agent: { runtime: "opencode", maxInputBytes: 200_000 },
+        agent: { runtime: "opencode", maxInputBytes: 200_000, cleanupSessions: false },
         timeoutMs: 30_000,
         recordUsage: true,
         decision: {

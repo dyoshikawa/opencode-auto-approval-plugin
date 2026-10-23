@@ -40,7 +40,10 @@ export class AgentReviewer implements Reviewer {
       configuration: this.#configuration,
     });
     const agent = this.#configuration.reviewer.agent;
+    // V1 and external SDK runtimes retain their existing session lifecycle.
+    const managesSession = agent.runtime === "opencode" && this.#client.remove !== undefined;
     const { sessionID } = await this.#client.create({
+      ...(managesSession ? { parentID: input.sessionID } : {}),
       model: (agent.runtime === "opencode" ? agent.model : undefined) ?? input.model,
     });
     this.#reviewerSessionIDs.add(sessionID);
@@ -56,6 +59,13 @@ export class AgentReviewer implements Reviewer {
       throw error;
     } finally {
       this.#reviewerSessionIDs.delete(sessionID);
+      // Never wait for deletion: the verdict and timeout are authoritative.
+      // Cleanup is opt-in because transcripts otherwise provide the audit trail.
+      if (managesSession && agent.cleanupSessions) {
+        void Promise.resolve()
+          .then(() => this.#client.remove?.({ sessionID }))
+          .catch(() => undefined);
+      }
     }
   }
 }

@@ -19,14 +19,17 @@ function clientWithResponse(input: { response: string }): ReviewSessionClient & 
   sessions: ReviewSessionOptions[];
   prompts: ReviewPrompt[];
   aborted: string[];
+  removed: string[];
 } {
   const sessions: ReviewSessionOptions[] = [];
   const prompts: ReviewPrompt[] = [];
   const aborted: string[] = [];
+  const removed: string[] = [];
   return {
     sessions,
     prompts,
     aborted,
+    removed,
     create: async (options) => {
       sessions.push(options);
       return { sessionID: "review-session" };
@@ -37,6 +40,9 @@ function clientWithResponse(input: { response: string }): ReviewSessionClient & 
     },
     abort: async ({ sessionID }) => {
       aborted.push(sessionID);
+    },
+    remove: async ({ sessionID }) => {
+      removed.push(sessionID);
     },
   };
 }
@@ -59,7 +65,10 @@ describe("AgentReviewer", () => {
       }),
     ).resolves.toEqual({ verdict: "allow", reason: "read-only" });
 
-    expect(client.sessions).toEqual([{ model: { providerID: "openai", modelID: "gpt-5.6-luna" } }]);
+    expect(client.sessions).toEqual([
+      { parentID: "main-session", model: { providerID: "openai", modelID: "gpt-5.6-luna" } },
+    ]);
+    expect(client.removed).toEqual([]);
     expect(client.prompts).toEqual([expect.objectContaining({ sessionID: "review-session" })]);
   });
 
@@ -83,7 +92,10 @@ describe("AgentReviewer", () => {
     });
 
     expect(client.sessions).toEqual([
-      { model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" } },
+      {
+        parentID: "main-session",
+        model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
+      },
     ]);
   });
 
@@ -189,6 +201,49 @@ describe("AgentReviewer", () => {
       reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} }),
     ).rejects.toThrow("Reviewer response did not contain JSON.");
     expect(client.aborted).toEqual(["review-session"]);
+  });
+
+  it("does not wait for an opt-in removal that never resolves", async () => {
+    const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
+    client.remove = async () => new Promise<never>(() => undefined);
+    const reviewer = new AgentReviewer({
+      client,
+      configuration: parsePluginConfiguration({
+        options: { reviewer: { agent: { cleanupSessions: true } } },
+      }),
+    });
+    await expect(
+      reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} }),
+    ).resolves.toEqual({ verdict: "allow", reason: "ok" });
+    expect(reviewer.isReviewerSession({ sessionID: "review-session" })).toBe(false);
+  });
+
+  it("keeps original error when opt-in removal fails", async () => {
+    const client = clientWithResponse({ response: "No verdict." });
+    client.remove = async () => {
+      throw new Error("cleanup failed");
+    };
+    const reviewer = new AgentReviewer({
+      client,
+      configuration: parsePluginConfiguration({
+        options: { reviewer: { agent: { cleanupSessions: true } } },
+      }),
+    });
+    await expect(
+      reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} }),
+    ).rejects.toThrow("Reviewer response did not contain JSON.");
+    expect(reviewer.isReviewerSession({ sessionID: "review-session" })).toBe(false);
+  });
+
+  it("does not pass parent linkage to V1 transports without removal support", async () => {
+    const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
+    delete client.remove;
+    const reviewer = new AgentReviewer({
+      client,
+      configuration: parsePluginConfiguration({ options: {} }),
+    });
+    await reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} });
+    expect(client.sessions).toEqual([{ model: undefined }]);
   });
 
   it("flattens and caps the reason it passes on to the user", async () => {
