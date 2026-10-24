@@ -9,7 +9,7 @@ import { isRecord } from "./shared.js";
 export type EscalationRule = {
   /** OpenCode permission action or tool name, with `*` and `?` wildcards. */
   action: string;
-  /** Matched against every string in the operation; any resource when unset. */
+  /** Matched against every string value in the operation; any resource when unset. */
   resource?: string;
 };
 
@@ -17,18 +17,16 @@ export type EscalationRule = {
 const maxStrings = 10_000;
 const maxDepth = 16;
 
-type CompiledRule = { rule: EscalationRule; action: RegExp; resource?: RegExp };
-
 export class EscalationRulesReviewer implements Reviewer {
   readonly #reviewer: Reviewer;
-  readonly #rules: CompiledRule[];
+  readonly #rules: EscalationRule[];
 
   constructor(input: { reviewer: Reviewer; rules: EscalationRule[] }) {
     this.#reviewer = input.reviewer;
+    // Patterns get the same whitespace folding as the strings they match.
     this.#rules = input.rules.map((rule) => ({
-      rule,
-      action: wildcard(rule.action),
-      ...(rule.resource === undefined ? {} : { resource: wildcard(rule.resource) }),
+      action: rule.action.toLowerCase(),
+      ...(rule.resource === undefined ? {} : { resource: normalized(rule.resource) }),
     }));
   }
 
@@ -47,29 +45,59 @@ export class EscalationRulesReviewer implements Reviewer {
   }
 }
 
+/** The first rule, in configuration order, that matches the operation. */
 function matchingRule(input: {
-  rules: CompiledRule[];
+  rules: EscalationRule[];
   request: ReviewRequest;
 }): EscalationRule | "unchecked" | undefined {
-  const rules = input.rules.filter((rule) => rule.action.test(input.request.action));
-  if (rules.length === 0) return undefined;
-  const unconditional = rules.find((rule) => rule.resource === undefined);
-  if (unconditional) return unconditional.rule;
-  const strings = stringsOf(input.request.resource);
-  if (strings === undefined) return "unchecked";
-  return rules.find((rule) => strings.some((value) => rule.resource?.test(value)))?.rule;
+  const action = input.request.action.toLowerCase();
+  let strings: string[] | undefined;
+  for (const rule of input.rules) {
+    if (!matchesWildcard({ value: action, pattern: rule.action })) continue;
+    const { resource } = rule;
+    if (resource === undefined) return rule;
+    strings ??= stringsOf(checkedPart(input.request));
+    if (strings === undefined) return "unchecked";
+    if (strings.some((value) => matchesWildcard({ value, pattern: resource }))) return rule;
+  }
+  return undefined;
 }
 
 /**
- * Every string in the operation, with runs of whitespace collapsed so that
- * `git  push` cannot slip past `git push *`. `undefined` when the operation is
- * too large or deep to walk.
+ * What a rule's resource is matched against: a permission request's
+ * resources or patterns (its metadata holds diffs and other derived text),
+ * or the whole tool input.
+ */
+function checkedPart(request: ReviewRequest): unknown {
+  if (request.source !== "permission-request" || !isRecord(request.resource)) {
+    return request.resource;
+  }
+  const { metadata: _metadata, ...rest } = request.resource;
+  return rest;
+}
+
+/**
+ * Matching ignores case (paths on case-insensitive file systems, URL hosts),
+ * shell line continuations and how much whitespace separates words; folding
+ * more than needed only escalates more.
+ */
+function normalized(value: string): string {
+  return value
+    .replace(/\\\r?\n/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Every string value in the operation, normalized like the patterns.
+ * `undefined` when the operation is too large or deep to walk.
  */
 function stringsOf(input: unknown): string[] | undefined {
   const strings: string[] = [];
   const visit = (value: unknown, depth: number): boolean => {
     if (typeof value === "string") {
-      strings.push(value.replace(/\s+/g, " ").trim());
+      strings.push(normalized(value));
       return strings.length <= maxStrings;
     }
     if (!isRecord(value)) return true;
@@ -80,19 +108,57 @@ function stringsOf(input: unknown): string[] | undefined {
 }
 
 /**
- * OpenCode's wildcard syntax: `*` matches anything, `?` one character, and a
- * trailing ` *` also matches the bare command (`git push *` matches
- * `git push`).
+ * OpenCode's wildcard syntax: `*` matches anything, `?` one character, the
+ * whole value must match, and a trailing ` *` also matches the bare command
+ * (`git push *` matches `git push`). Matched segment by segment, never
+ * through a regular expression, so a long value cannot make it backtrack.
  */
-function wildcard(pattern: string): RegExp {
-  const optionalTail = pattern.endsWith(" *");
-  const body = optionalTail ? pattern.slice(0, -2) : pattern;
-  const source = [...body]
-    .map((character) => {
-      if (character === "*") return "[\\s\\S]*";
-      if (character === "?") return "[\\s\\S]";
-      return character.replace(/[.+^${}()|[\]\\/-]/g, "\\$&");
-    })
-    .join("");
-  return new RegExp(`^${source}${optionalTail ? "(?: [\\s\\S]*)?" : ""}$`);
+export function matchesWildcard(input: { value: string; pattern: string }): boolean {
+  if (input.pattern.endsWith(" *") && matchesGlob(input.value, input.pattern.slice(0, -2))) {
+    return true;
+  }
+  return matchesGlob(input.value, input.pattern);
+}
+
+function matchesGlob(value: string, pattern: string): boolean {
+  const segments = pattern.split("*");
+  const first = segments[0] ?? "";
+  if (segments.length === 1) return value.length === first.length && segmentAt(value, first, 0);
+  const last = segments.at(-1) ?? "";
+  if (value.length < first.length + last.length) return false;
+  if (!segmentAt(value, first, 0) || !segmentAt(value, last, value.length - last.length)) {
+    return false;
+  }
+  // Leftmost placement of each middle segment is always safe for `*`.
+  let position = first.length;
+  const end = value.length - last.length;
+  for (const segment of segments.slice(1, -1)) {
+    const found = findSegment({ value, segment, from: position, end });
+    if (found === -1) return false;
+    position = found + segment.length;
+  }
+  return true;
+}
+
+/** Whether `segment` (`?` = any one character) matches `value` at `index`. */
+function segmentAt(value: string, segment: string, index: number): boolean {
+  if (index < 0 || index + segment.length > value.length) return false;
+  for (let offset = 0; offset < segment.length; offset++) {
+    const expected = segment[offset];
+    if (expected !== "?" && expected !== value[index + offset]) return false;
+  }
+  return true;
+}
+
+/** The first index in `[from, end - segment.length]` where `segment` matches. */
+function findSegment(input: { value: string; segment: string; from: number; end: number }): number {
+  const { value, segment, from, end } = input;
+  if (!segment.includes("?")) {
+    const index = value.indexOf(segment, from);
+    return index !== -1 && index + segment.length <= end ? index : -1;
+  }
+  for (let index = from; index + segment.length <= end; index++) {
+    if (segmentAt(value, segment, index)) return index;
+  }
+  return -1;
 }

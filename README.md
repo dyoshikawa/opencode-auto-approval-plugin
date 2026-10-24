@@ -605,14 +605,16 @@ with the matched rule as the reason. Rules are off by default.
       "package": "opencode-auto-approval-plugin",
       "options": {
         "escalate": [
-          // Publishing, pushing and destroying
-          { "action": "bash", "resource": "*git push*" },
-          { "action": "bash", "resource": "*npm publish*" },
-          { "action": "bash", "resource": "*rm -rf*" },
-          // Network access and credentials
+          // Publishing, pushing and destroying (`shell` on OpenCode 2.x, `bash` on 1.x)
+          { "action": "shell", "resource": "*git push*" },
+          { "action": "shell", "resource": "*npm publish*" },
+          { "action": "shell", "resource": "*rm -rf*" },
+          // Network access
           { "action": "webfetch" },
-          { "action": "bash", "resource": "*curl *" },
-          { "action": "*", "resource": "*.env*" },
+          { "action": "shell", "resource": "*curl *" },
+          // Credentials, by path
+          { "action": "*", "resource": "*/.env" },
+          { "action": "*", "resource": "*/.env.*" },
           { "action": "*", "resource": "*id_rsa*" },
         ],
       },
@@ -621,23 +623,32 @@ with the matched rule as the reason. Rules are off by default.
 }
 ```
 
-- `action` is matched against the OpenCode permission action (`on-ask`: `bash`, `edit`,
-  `webfetch`, `external_directory`, …) or the tool name (`all-tools`: `bash` on 1.x, `shell` on
-  2.x, MCP tool names, …). List both names when you use both modes.
-- `resource` is matched against every string in the operation: the permission request's
-  resources or patterns, or every string in the tool input (a command, a file path, an URL, nested
-  values included). A rule without `resource` matches every operation of its action. Runs of
-  whitespace are collapsed before matching, and an operation too large or deeply nested to check
-  escalates.
+- `action` is matched against the OpenCode permission action in `on-ask` mode and the tool name in
+  `all-tools` mode. The shell is `shell` on OpenCode 2.x and `bash` on 1.x; list both when one
+  configuration serves both. One permission action can cover several tools (`edit` covers `write`,
+  `apply_patch` and friends), so write path rules with `"action": "*"` when they must hold in both
+  modes.
+- `resource` is matched against every string **value** in the operation: a permission request's
+  resources or patterns (not its metadata, which holds diffs), or every string in the tool input,
+  nested values included — file contents too, so keep content-like patterns to the shell action.
+  Object keys, numbers and booleans are not matched. A rule without `resource` matches every
+  operation of its action. An operation more than 16 levels deep or with more than 10,000 strings
+  escalates under any rule for its action.
 - Patterns use OpenCode's wildcards: `*` matches anything (including nothing), `?` one character,
   and the whole string must match, so `git push *` matches `git push` and `git push origin` but not
   `cd repo && git push`; write `*git push*` to catch it anywhere. A trailing ` *` also matches the
-  bare command.
-- Rules are a deterministic floor, not a sandbox: a shell command can spell the same thing many
-  ways (`g""it push`, a script file, an alias) that no pattern lists. Keep OpenCode `deny`
+  bare command. Matching ignores case, shell line continuations and runs of whitespace, in patterns
+  and values alike, and runs in linear time, never through a regular expression.
+- The first matching rule, in configuration order, is the one reported. Escalations from a rule
+  are written to the [audit log](#audit-log-opt-in) like any verdict. At most 200 rules; an
+  `action` is at most 200 characters and a `resource` at most 1,000.
+- Rules are a deterministic floor, not a sandbox. A shell command can spell the same thing many
+  ways (`g""it push`, a variable, a script file, an alias) and a URL can be percent-encoded, which
+  no pattern lists. In `on-ask` mode a rule only sees what OpenCode already asks about. The
+  reviewer's own read-only session is not checked against the rules. Keep OpenCode `deny`
   permissions for what must never run; they stay authoritative whatever the reviewer says.
-- Escalations from a rule are written to the [audit log](#audit-log-opt-in) like any verdict. At
-  most 200 rules; an `action` is at most 200 characters and a `resource` at most 1,000.
+- With `allToolsNativeAsks: "review"`, a same-action native ask is answered from the reviewed call,
+  which the rules already checked; its own resources are not matched again.
 
 ### Audit log (opt-in)
 

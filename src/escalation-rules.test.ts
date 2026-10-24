@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { type EscalationRule, EscalationRulesReviewer } from "./escalation-rules.js";
+import {
+  type EscalationRule,
+  EscalationRulesReviewer,
+  matchesWildcard,
+} from "./escalation-rules.js";
 import type { ReviewRequest } from "./reviewer.js";
 
 /** A reviewer that allows everything, as an injected or misled model might. */
@@ -13,6 +17,15 @@ function permissiveReviewer() {
 
 function toolCall(action: string, resource: unknown): ReviewRequest {
   return { source: "tool-call", sessionID: "s", action, resource };
+}
+
+function edit(resources: string[]): ReviewRequest {
+  return {
+    source: "permission-request",
+    sessionID: "s",
+    action: "edit",
+    resource: { resources, metadata: { diff: "+ const url = process.env.URL;" } },
+  };
 }
 
 const highRisk: EscalationRule[] = [
@@ -110,6 +123,59 @@ describe("EscalationRulesReviewer", () => {
       rules: [{ action: "bash", resource: "*git push*" }],
     });
     expect((await reviewer.review(toolCall("read", resource))).verdict).toBe("allow");
+  });
+
+  it("ignores case, line continuations and whitespace in values and patterns", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [
+        { action: "Bash", resource: "*git  push*" },
+        { action: "*", resource: "*evil.com*" },
+      ],
+    });
+    const verdict = async (request: ReviewRequest) => (await reviewer.review(request)).verdict;
+    expect(await verdict(toolCall("bash", { command: "GIT Push" }))).toBe("escalate");
+    expect(await verdict(toolCall("bash", { command: "git \\\npush" }))).toBe("escalate");
+    expect(await verdict(toolCall("webfetch", { url: "https://EVIL.com/x" }))).toBe("escalate");
+  });
+
+  it("matches a permission request's resources but not its metadata", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "edit", resource: "*.env*" }],
+    });
+    expect((await reviewer.review(edit(["src/config.ts"]))).verdict).toBe("allow");
+    expect((await reviewer.review(edit(["/workspace/.env"]))).verdict).toBe("escalate");
+  });
+
+  it("reports the first matching rule in configuration order", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "bash", resource: "*push*" }, { action: "bash" }],
+    });
+    const decision = await reviewer.review(toolCall("bash", { command: "git push" }));
+    expect(decision.reason).toContain('{"action":"bash","resource":"*push*"}');
+  });
+
+  it("escalates an operation with too many strings to check", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "bash", resource: "*git push*" }],
+    });
+    const lines = Array.from({ length: 10_001 }, (_, index) => `echo ${index}`);
+    expect((await reviewer.review(toolCall("bash", { lines }))).reason).toContain(
+      "too large to check",
+    );
+  });
+
+  it("matches long values in linear time", () => {
+    const value = "git push ".repeat(200_000);
+    const started = performance.now();
+    expect(matchesWildcard({ value, pattern: "*git*push*force*" })).toBe(false);
+    expect(matchesWildcard({ value: `${"a".repeat(1_000_000)}b`, pattern: "*a*a*a*c" })).toBe(
+      false,
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   it("asks the wrapped reviewer which sessions are its own", () => {

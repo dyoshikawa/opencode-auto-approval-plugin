@@ -154,7 +154,7 @@ describe("plugin entrypoint", () => {
         await plugin.setup({
           options: {
             mode,
-            escalate: [{ action: "bash", resource: "*git push*" }],
+            escalate: [{ action: "shell", resource: "*git push*" }],
             reviewer: {
               backend: "decision",
               recordUsage: false,
@@ -169,9 +169,10 @@ describe("plugin entrypoint", () => {
         } as never);
 
         if (mode === "on-ask") {
+          expect(hooks["permission.evaluate"]).toBeDefined();
           const event = {
             sessionID: "s",
-            action: "bash",
+            action: "shell",
             resources: ["git push --force"],
             metadata: {},
             effect: "ask",
@@ -182,7 +183,7 @@ describe("plugin entrypoint", () => {
           await expect(
             hooks["tool.execute.before"]?.({
               sessionID: "s",
-              tool: "bash",
+              tool: "shell",
               input: { command: "git push --force" },
             }),
           ).rejects.toThrow(
