@@ -42,13 +42,20 @@ function inputDigest(input: unknown): string {
     .digest("hex");
 }
 
-/** Whether the live call still is the one that was reviewed. */
+/**
+ * Whether the live call still is the one that was reviewed. An input that
+ * can no longer be serialized counts as changed.
+ */
 function unchanged(grant: {
   tool: string;
   inputDigest: string;
   call: { tool: string; input: unknown };
 }): boolean {
-  return grant.call.tool === grant.tool && inputDigest(grant.call.input) === grant.inputDigest;
+  try {
+    return grant.call.tool === grant.tool && inputDigest(grant.call.input) === grant.inputDigest;
+  } catch {
+    return false;
+  }
 }
 
 /** V2 model references use `id`; the plugin configuration keeps V1's `modelID`. */
@@ -205,7 +212,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       }
 
       // Opt-in only. By default a native "ask" remains a mandatory human checkpoint.
-      // V1 has no matching permission bridge and intentionally keeps its old semantics.
+      // V1 has no matching permission bridge and rejects the option at startup.
       const nativeGrants = new Map<
         string,
         {
@@ -289,7 +296,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
             grant &&
             (grant.tool !== event.tool || grant.inputDigest !== inputDigest(event.input))
           ) {
-            throw new Error("Tool input changed after auto-review approval.");
+            throw new Error("Tool call changed after auto-review approval.");
           }
         });
       }
@@ -318,6 +325,9 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         });
         if (intent.changed()) {
           throw new Error("User intent changed during review; human review is required.");
+        }
+        if (!unchanged({ ...reviewed, call: event })) {
+          throw new Error("Tool call changed during review; human review is required.");
         }
         if (configuration.allToolsNativeAsks === "review") {
           nativeGrants.set(key, {

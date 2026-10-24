@@ -646,7 +646,7 @@ describe("V2 plugin (opencode 2.x)", () => {
         input: { command: "rm -rf /" },
         status: "completed",
       }),
-    ).toThrow("Tool input changed after auto-review approval.");
+    ).toThrow("Tool call changed after auto-review approval.");
   });
 
   it("leaves the native ask to a human when a later hook rewrote the reviewed call", async () => {
@@ -665,54 +665,38 @@ describe("V2 plugin (opencode 2.x)", () => {
       (call: Record<string, unknown>) => {
         call.tool = "write";
       },
+      (call: Record<string, unknown>) => {
+        (call.input as { size: bigint }).size = 1n;
+      },
     ]) {
-      const call: Record<string, unknown> = {
-        sessionID: "session-1",
-        agent: "explore",
-        messageID: "msg-1",
-        id: "call-1",
-        tool: "shell",
-        input: { command: "ls" },
-      };
+      const call: Record<string, unknown> = shellCall("call-1");
       await hooks["tool.execute.before"]?.(call);
       rewrite(call);
-      const event = askEvent({
-        agent: "explore",
-        action: "shell",
-        source: { type: "tool", messageID: "msg-1", id: "call-1" },
-      });
+      const event = shellAsk("call-1");
       await hooks["permission.evaluate"]?.(event);
       expect(event.effect).toBe("ask");
     }
   });
 
-  it("refuses a grant when the input changed while the review ran", async () => {
-    const { context, hooks } = createContext({
-      options: { mode: "all-tools", allToolsNativeAsks: "review" },
-    });
-    const { plugin, review } = createPlugin({ verdict: "allow" });
-    await plugin.setup(context as never);
-    const call = {
-      sessionID: "session-1",
-      agent: "explore",
-      messageID: "msg-1",
-      id: "call-1",
-      tool: "shell",
-      input: { command: "ls" },
-    };
-    review.mockImplementationOnce(async () => {
-      call.input = { command: "rm -rf /" };
-      return { verdict: "allow", reason: "reviewed" };
-    });
-    await hooks["tool.execute.before"]?.(call);
-    const event = askEvent({
-      agent: "explore",
-      action: "shell",
-      source: { type: "tool", messageID: "msg-1", id: "call-1" },
-    });
-    await hooks["permission.evaluate"]?.(event);
-    expect(event.effect).toBe("ask");
-  });
+  it.each([{ mode: "all-tools" }, { mode: "all-tools", allToolsNativeAsks: "review" }])(
+    "blocks a call whose input changed while the review ran (%o)",
+    async (options) => {
+      const { context, hooks } = createContext({ options });
+      const { plugin, review } = createPlugin({ verdict: "allow" });
+      await plugin.setup(context as never);
+      const call = shellCall("call-1");
+      review.mockImplementationOnce(async () => {
+        call.input = { command: "rm -rf /" };
+        return { verdict: "allow", reason: "reviewed" };
+      });
+      await expect(hooks["tool.execute.before"]?.(call)).rejects.toThrow(
+        "Tool call changed during review; human review is required.",
+      );
+      const event = shellAsk("call-1");
+      await hooks["permission.evaluate"]?.(event);
+      expect(event.effect).toBe("ask");
+    },
+  );
 
   it("detects a changed tool name in the post-execution hook", async () => {
     const { context, hooks } = createContext({
@@ -720,18 +704,11 @@ describe("V2 plugin (opencode 2.x)", () => {
     });
     const { plugin } = createPlugin({ verdict: "allow" });
     await plugin.setup(context as never);
-    const call = {
-      sessionID: "session-1",
-      agent: "explore",
-      messageID: "msg-1",
-      id: "call-1",
-      tool: "shell",
-      input: { command: "ls" },
-    };
+    const call = shellCall("call-1");
     await hooks["tool.execute.before"]?.(call);
     expect(() =>
       hooks["tool.execute.after"]?.({ ...call, tool: "write", status: "completed" }),
-    ).toThrow("Tool input changed after auto-review approval.");
+    ).toThrow("Tool call changed after auto-review approval.");
   });
 
   it("keeps parallel calls in one message apart", async () => {
@@ -751,24 +728,22 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(second.effect).toBe("allow");
   });
 
-  it("does not bridge a native ask that carries no agent", async () => {
+  it("does not bridge a native ask that carries no agent or comes from the reviewer", async () => {
     const { context, hooks } = createContext({
       options: { mode: "all-tools", allToolsNativeAsks: "review" },
     });
-    const { plugin, review } = createPlugin({ verdict: "allow" });
+    const { plugin, review, isReviewerSession } = createPlugin({ verdict: "allow" });
     await plugin.setup(context as never);
-    await hooks["tool.execute.before"]?.({
-      sessionID: "session-1",
-      agent: "explore",
-      messageID: "msg-1",
-      id: "call-1",
-      tool: "shell",
-      input: { command: "ls" },
-    });
-    const source = { type: "tool", messageID: "msg-1", id: "call-1" };
-    const withoutAgent = askEvent({ action: "shell", source });
+    await hooks["tool.execute.before"]?.(shellCall("call-1"));
+    const withoutAgent = shellAsk("call-1");
+    delete (withoutAgent as { agent?: string }).agent;
     await hooks["permission.evaluate"]?.(withoutAgent);
     expect(withoutAgent.effect).toBe("ask");
+    // A grant whose session later turns out to be a reviewer's is not used.
+    isReviewerSession.mockReturnValue(true);
+    const fromReviewer = shellAsk("call-1");
+    await hooks["permission.evaluate"]?.(fromReviewer);
+    expect(fromReviewer.effect).toBe("ask");
     expect(review).toHaveBeenCalledTimes(1);
   });
 

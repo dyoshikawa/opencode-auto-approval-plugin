@@ -741,10 +741,12 @@ resources. Failed or escalated extra reviews are denied without an interactive
 prompt. This may cost an additional model call.
 
 Other plugins and core hooks may mutate a tool's name or input after the
-reviewer's `execute.before` hook. Before granting a native ask, the plugin checks
-that the call still matches what was reviewed (taken before the review started);
-a changed call leaves the ask to a human. A change made after the last native ask
-is only detected in `execute.after`, **after execution**: the plugin then throws,
+reviewer's `execute.before` hook. The plugin blocks a call that changed while it
+was being reviewed, and before granting a native ask it checks that the call still
+matches what was reviewed; a changed call leaves the ask to a human. These checks
+rely on later hooks changing the same event object that OpenCode then runs. A
+change made after the review and after the last native ask (or in a call that
+raises no native ask) is only detected in `execute.after`, **after execution**: the plugin then throws,
 but the plugin API does not define what OpenCode does with that error, and the
 tool has already run. This is not
 a hard security boundary. Use only with trusted plugins and hooks. Native asks
