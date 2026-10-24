@@ -42,19 +42,25 @@ const wellKnownTokens =
   /\b(?:gh[pousr]_[A-Za-z0-9_]{30,}|github_pat_[A-Za-z0-9_]{22,}|sk-[A-Za-z0-9_-]{20,}|typesafe_[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,})\b/gi;
 
 /**
- * Characters a credential value is made of. No whitespace, quote, `$`,
- * backtick, bracket or shell operator: whatever `redactForReview` replaces
- * cannot contain a command, so the reviewer always sees what would run.
+ * What a credential value looks like to `redactForReview`: one long run of
+ * key characters, or a JWT. Neither can hold a space, quote, `$`, backtick,
+ * bracket or shell operator, nor a `.`, `/`, `~`, `:` or `@` outside a JWT,
+ * so no path, host, URL or command can pass for a credential and be hidden
+ * from the reviewer.
  */
-const token = "[A-Za-z0-9._~+/=:@%,!-]";
-const tokenOnly = new RegExp(`^${token}+$`);
-const secretName = /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL)S?(?:_|$)/i;
+const secretValue =
+  "(?:[A-Za-z0-9_+=-]{16,4096}|[A-Za-z0-9_-]{8,2048}\\.[A-Za-z0-9_-]{8,2048}\\.[A-Za-z0-9_-]{8,2048})";
+const secretOnly = new RegExp(`^${secretValue}$`);
+/** A variable that holds a credential, not one that points at it (`*_PATH`, `SSH_AUTH_SOCK`). */
+const secretName = /(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$/i;
 
 /**
- * Replaces credentials in what a reviewer is shown, conservatively: only
- * values made of credential characters (see `token`), never across a quote,
- * space or shell syntax, so crafted text cannot make it hide part of an
- * operation. Every quantifier is bounded, so it runs in linear time.
+ * Replaces credentials in what a reviewer is shown, conservatively: only a
+ * secret-shaped value (see `secretValue`) next to what names it as one, the
+ * reviewer API keys in use, complete private key blocks, URL passwords and
+ * well-known token formats. Crafted text cannot make it hide a destination,
+ * a file or a command. Every quantifier is bounded, so it runs in linear
+ * time.
  */
 export function redactForReview(input: {
   text: string;
@@ -66,8 +72,9 @@ export function redactForReview(input: {
     if (apiKey.length >= 8) text = text.split(apiKey).join("[REDACTED_KEY]");
   }
   for (const pattern of input.patterns) {
-    text = text.replace(pattern, (match) => (tokenOnly.test(match) ? "[REDACTED]" : match));
+    text = text.replace(pattern, (match) => (secretOnly.test(match) ? "[REDACTED]" : match));
   }
+  const end = "(?![A-Za-z0-9_+=./~:@-])";
   return text
     .replace(
       /-----BEGIN ([A-Z ]{0,40})PRIVATE KEY-----[A-Za-z0-9+/=\s]{1,100000}?-----END \1PRIVATE KEY-----/g,
@@ -75,31 +82,26 @@ export function redactForReview(input: {
     )
     .replace(
       new RegExp(
-        `\\b((?:Proxy-)?Authorization|X-API-Key|X-Auth-Token)(:?[ \\t]{0,8})((?:Bearer|Basic|Token|Key)[ \\t]{1,8})?${token}{8,4096}(?!${token})`,
+        `\\b((?:(?:Proxy-)?Authorization|X-API-Key|X-Auth-Token):[ \\t]{0,8}(?:(?:Bearer|Basic|Token)[ \\t]{1,8})?|Bearer[ \\t]{1,8})${secretValue}${end}`,
         "gi",
       ),
-      (_match, name: string, separator: string, scheme: string | undefined) =>
-        `${name}${separator}${scheme ?? ""}[REDACTED]`,
-    )
-    .replace(
-      new RegExp(`\\b(Bearer|Basic)[ \\t]{1,8}${token}{8,4096}(?!${token})`, "gi"),
-      "$1 [REDACTED]",
+      "$1[REDACTED]",
     )
     .replace(
       new RegExp(
-        `(--(?:password|token|api-key|secret|auth|apikey))([= ])(["']?)${token}{1,4096}\\3(?!${token})`,
+        `(--(?:password|token|api-key|secret|apikey)(?:=|[ \\t]{1,8}))(["']?)${secretValue}\\2${end}`,
         "gi",
       ),
-      "$1$2$3[REDACTED]$3",
+      "$1$2[REDACTED]$2",
     )
     .replace(
-      new RegExp(`\\b([A-Za-z_][A-Za-z0-9_]{0,63})=(["']?)${token}{1,4096}\\2(?!${token})`, "g"),
+      new RegExp(`\\b([A-Za-z_][A-Za-z0-9_]{0,63})=(["']?)${secretValue}\\2${end}`, "g"),
       (match, name: string, quote: string) =>
         secretName.test(name) ? `${name}=${quote}[REDACTED]${quote}` : match,
     )
     .replace(
-      /((?:https?|ftp|ssh):\/\/)[A-Za-z0-9._~%+-]{1,256}(?::[A-Za-z0-9._~%+-]{0,256})?@/gi,
-      "$1[REDACTED]@",
+      /((?:https?|ftp|ssh):\/\/[A-Za-z0-9._~%+-]{1,256}):[A-Za-z0-9._~%+-]{1,256}@/gi,
+      "$1:[REDACTED]@",
     )
     .replace(wellKnownTokens, "[REDACTED_TOKEN]");
 }
