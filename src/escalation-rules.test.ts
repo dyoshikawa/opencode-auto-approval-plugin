@@ -178,6 +178,38 @@ describe("EscalationRulesReviewer", () => {
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 
+  it.each([
+    ["ab*b", "ab", false],
+    ["ab*b", "abb", true],
+    ["a**c", "abc", true],
+    ["*a?c*", "xx abc yy", true],
+    ["*a?c*", "xx ac yy", false],
+    ["*", "", true],
+    ["?", "", false],
+    ["git push *", "git push", true],
+    ["git push *", "git pushed", false],
+    ["*.env", ".env", true],
+    ["*.env.*", "config/.env.local", true],
+  ])("matches %j against %j: %s", (pattern, value, expected) => {
+    expect(matchesWildcard({ value, pattern })).toBe(expected);
+  });
+
+  it("catches a project-relative .env in an on-ask request for the shell or a read", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "*", resource: "*.env" }],
+    });
+    for (const action of ["read", "shell"]) {
+      const decision = await reviewer.review({
+        source: "permission-request",
+        sessionID: "s",
+        action,
+        resource: { resources: [action === "read" ? ".env" : "cat .env"], metadata: {} },
+      });
+      expect(decision.verdict).toBe("escalate");
+    }
+  });
+
   it("asks the wrapped reviewer which sessions are its own", () => {
     const reviewer = new EscalationRulesReviewer({ reviewer: permissiveReviewer(), rules: [] });
     expect(reviewer.isReviewerSession({ sessionID: "review" })).toBe(true);

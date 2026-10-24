@@ -613,8 +613,8 @@ with the matched rule as the reason. Rules are off by default.
           { "action": "webfetch" },
           { "action": "shell", "resource": "*curl *" },
           // Credentials, by path
-          { "action": "*", "resource": "*/.env" },
-          { "action": "*", "resource": "*/.env.*" },
+          { "action": "*", "resource": "*.env" },
+          { "action": "*", "resource": "*.env.*" },
           { "action": "*", "resource": "*id_rsa*" },
         ],
       },
@@ -638,7 +638,9 @@ with the matched rule as the reason. Rules are off by default.
   and the whole string must match, so `git push *` matches `git push` and `git push origin` but not
   `cd repo && git push`; write `*git push*` to catch it anywhere. A trailing ` *` also matches the
   bare command. Matching ignores case, shell line continuations and runs of whitespace, in patterns
-  and values alike, and runs in linear time, never through a regular expression.
+  and values alike. It never goes through a regular expression, so it cannot backtrack: the cost
+  grows with the value's and the pattern's length. Paths may arrive relative to the project in
+  `on-ask` mode (`.env`) and absolute in `all-tools` mode, so start path patterns with `*`.
 - The first matching rule, in configuration order, is the one reported. Escalations from a rule
   are written to the [audit log](#audit-log-opt-in) like any verdict. At most 200 rules; an
   `action` is at most 200 characters and a `resource` at most 1,000.

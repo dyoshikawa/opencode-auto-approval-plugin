@@ -50,6 +50,8 @@ describe("parsePluginConfiguration", () => {
     for (const escalate of [
       [{ action: "" }],
       [{ action: "bash", resource: "" }],
+      [{ action: "bash", resource: "   " }],
+      [{ action: " " }],
       [{ resource: "git push *" }],
       Array.from({ length: 201 }, () => ({ action: "bash" })),
       "bash",

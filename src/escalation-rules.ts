@@ -111,7 +111,8 @@ function stringsOf(input: unknown): string[] | undefined {
  * OpenCode's wildcard syntax: `*` matches anything, `?` one character, the
  * whole value must match, and a trailing ` *` also matches the bare command
  * (`git push *` matches `git push`). Matched segment by segment, never
- * through a regular expression, so a long value cannot make it backtrack.
+ * through a regular expression, so a long value cannot make it backtrack;
+ * the cost is bounded by the value's length times the pattern's.
  */
 export function matchesWildcard(input: { value: string; pattern: string }): boolean {
   if (input.pattern.endsWith(" *") && matchesGlob(input.value, input.pattern.slice(0, -2))) {

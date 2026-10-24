@@ -269,6 +269,11 @@ const decisionOptionsSchema = z.discriminatedUnion("provider", [
   }),
 ]);
 
+/** Whitespace alone would normalize to a pattern that matches nothing. */
+function hasText(value: string): boolean {
+  return value.trim() !== "";
+}
+
 const pluginConfigurationSchema = z.object({
   auditLog: z.optional(
     z.object({
@@ -288,8 +293,10 @@ const pluginConfigurationSchema = z.object({
     z
       .array(
         z.object({
-          action: z.string().check(z.minLength(1), z.maxLength(200)),
-          resource: z.optional(z.string().check(z.minLength(1), z.maxLength(1_000))),
+          action: z.string().check(z.minLength(1), z.maxLength(200), z.refine(hasText)),
+          resource: z.optional(
+            z.string().check(z.minLength(1), z.maxLength(1_000), z.refine(hasText)),
+          ),
         }),
       )
       .check(z.maxLength(200)),
