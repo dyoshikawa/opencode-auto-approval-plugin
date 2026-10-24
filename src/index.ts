@@ -4,6 +4,7 @@ import { ChatReviewer } from "./chat-reviewer.js";
 import { ClaudeAgentReviewer } from "./claude-agent-reviewer.js";
 import { CodexReviewer } from "./codex-reviewer.js";
 import { DecisionReviewer } from "./decision-reviewer.js";
+import { EscalationRulesReviewer } from "./escalation-rules.js";
 import { OversizeFallbackReviewer } from "./fallback-reviewer.js";
 import type { Reviewer } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
@@ -13,7 +14,11 @@ import { createV2Plugin } from "./v2.js";
 
 const defaultDependencies: PluginDependencies = {
   createReviewer: (input) => {
-    const reviewer = backendReviewer(input);
+    const backend = backendReviewer(input);
+    const rules = input.configuration.escalate;
+    // Inside the audit log, so a rule's escalation is recorded like a verdict.
+    const reviewer =
+      rules.length === 0 ? backend : new EscalationRulesReviewer({ reviewer: backend, rules });
     const audit = input.configuration.auditLog;
     if (!audit.enabled || !audit.path) return reviewer;
     return new AuditingReviewer({

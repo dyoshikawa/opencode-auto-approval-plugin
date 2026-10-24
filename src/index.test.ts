@@ -135,4 +135,64 @@ describe("plugin entrypoint", () => {
       "https://openrouter.ai/api/v1/chat/completions",
     ]);
   });
+  it.each(["on-ask", "all-tools"])(
+    "escalates an operation matching an escalate rule before any reviewer runs (%s)",
+    async (mode) => {
+      const hooks: Record<string, (event: Record<string, unknown>) => Promise<void>> = {};
+      const registration = { dispose: async () => undefined };
+      const register =
+        (prefix: string) =>
+        async (name: string, callback: (event: Record<string, unknown>) => Promise<void>) => {
+          hooks[`${prefix}.${name}`] = callback;
+          return registration;
+        };
+      const fetch = vi.fn(async () =>
+        Response.json({ answers: { verdict: { choice: "allow", probabilities: { allow: 1 } } } }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      try {
+        await plugin.setup({
+          options: {
+            mode,
+            escalate: [{ action: "bash", resource: "*git push*" }],
+            reviewer: {
+              backend: "decision",
+              recordUsage: false,
+              decision: { provider: "typesafe", apiKey: "test-key" },
+            },
+          },
+          location: { directory: "/workspace" },
+          session: { hook: async () => registration, create: vi.fn() },
+          agent: { transform: async () => registration },
+          permission: { hook: register("permission") },
+          tool: { hook: register("tool") },
+        } as never);
+
+        if (mode === "on-ask") {
+          const event = {
+            sessionID: "s",
+            action: "bash",
+            resources: ["git push --force"],
+            metadata: {},
+            effect: "ask",
+          };
+          await hooks["permission.evaluate"]?.(event);
+          expect(event.effect).toBe("ask");
+        } else {
+          await expect(
+            hooks["tool.execute.before"]?.({
+              sessionID: "s",
+              tool: "bash",
+              input: { command: "git push --force" },
+            }),
+          ).rejects.toThrow(
+            "Auto-approval reviewer requires human review: Matched the escalate rule",
+          );
+        }
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 
 import * as z from "zod/mini";
 
+import type { EscalationRule } from "./escalation-rules.js";
 import { estimateTokens } from "./reviewer.js";
 
 const reviewerModes = ["on-ask", "all-tools"] as const;
@@ -124,6 +125,8 @@ export type PluginConfiguration = {
   /** V2 all-tools: preserve native asks unless explicitly opted into AI review. */
   allToolsNativeAsks: "preserve" | "review";
   auditLog: { enabled: boolean; includeCommand: boolean; path?: string };
+  /** Operations escalated to a human before any reviewer sees them. */
+  escalate: EscalationRule[];
   conversation: { enabled: boolean; includeAssistant: boolean };
   reviewer: {
     backend: ReviewerBackend;
@@ -281,6 +284,16 @@ const pluginConfigurationSchema = z.object({
     }),
   ),
   mode: z.optional(z.enum(reviewerModes)),
+  escalate: z.optional(
+    z
+      .array(
+        z.object({
+          action: z.string().check(z.minLength(1), z.maxLength(200)),
+          resource: z.optional(z.string().check(z.minLength(1), z.maxLength(1_000))),
+        }),
+      )
+      .check(z.maxLength(200)),
+  ),
   allToolsNativeAsks: z.optional(z.enum(["preserve", "review"] as const)),
   reviewer: z.optional(
     z.object({
@@ -331,6 +344,10 @@ export function parsePluginConfiguration(input: {
   const configuration: PluginConfiguration = {
     ...modeConfiguration(result.data),
     auditLog: auditConfiguration(result.data.auditLog),
+    escalate: (result.data.escalate ?? []).map(({ action, resource }) => ({
+      action,
+      ...(resource === undefined ? {} : { resource }),
+    })),
     conversation: conversationConfiguration(result.data.conversation),
     reviewer: {
       backend,

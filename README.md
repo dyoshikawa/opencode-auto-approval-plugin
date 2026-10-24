@@ -590,6 +590,55 @@ unknown or the operation is ambiguous, and your instructions can only argue agai
 - Like `instructions`, set it only in configuration you trust — not in a repository's
   `opencode.json` you have not reviewed.
 
+### Escalate rules (deterministic)
+
+`reviewer.instructions` are guidance a model may still get wrong, and an injected or misled reviewer
+can answer `allow` to anything. `escalate` lists operations that always go to a human: a matching
+operation is escalated **before any reviewer sees it**, with every backend and both plugin API
+generations. In `on-ask` mode the OpenCode prompt stays; in `all-tools` mode the tool is blocked
+with the matched rule as the reason. Rules are off by default.
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "escalate": [
+          // Publishing, pushing and destroying
+          { "action": "bash", "resource": "*git push*" },
+          { "action": "bash", "resource": "*npm publish*" },
+          { "action": "bash", "resource": "*rm -rf*" },
+          // Network access and credentials
+          { "action": "webfetch" },
+          { "action": "bash", "resource": "*curl *" },
+          { "action": "*", "resource": "*.env*" },
+          { "action": "*", "resource": "*id_rsa*" },
+        ],
+      },
+    },
+  ],
+}
+```
+
+- `action` is matched against the OpenCode permission action (`on-ask`: `bash`, `edit`,
+  `webfetch`, `external_directory`, …) or the tool name (`all-tools`: `bash` on 1.x, `shell` on
+  2.x, MCP tool names, …). List both names when you use both modes.
+- `resource` is matched against every string in the operation: the permission request's
+  resources or patterns, or every string in the tool input (a command, a file path, an URL, nested
+  values included). A rule without `resource` matches every operation of its action. Runs of
+  whitespace are collapsed before matching, and an operation too large or deeply nested to check
+  escalates.
+- Patterns use OpenCode's wildcards: `*` matches anything (including nothing), `?` one character,
+  and the whole string must match, so `git push *` matches `git push` and `git push origin` but not
+  `cd repo && git push`; write `*git push*` to catch it anywhere. A trailing ` *` also matches the
+  bare command.
+- Rules are a deterministic floor, not a sandbox: a shell command can spell the same thing many
+  ways (`g""it push`, a script file, an alias) that no pattern lists. Keep OpenCode `deny`
+  permissions for what must never run; they stay authoritative whatever the reviewer says.
+- Escalations from a rule are written to the [audit log](#audit-log-opt-in) like any verdict. At
+  most 200 rules; an `action` is at most 200 characters and a `resource` at most 1,000.
+
 ### Audit log (opt-in)
 
 These options work with both plugin API generations and every reviewer backend. Add them to
