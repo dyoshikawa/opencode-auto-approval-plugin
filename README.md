@@ -636,7 +636,9 @@ with the matched rule as the reason. Rules are off by default.
   escalates under any rule for its action.
 - Patterns use OpenCode's wildcards: `*` matches anything (including nothing), `?` one character,
   and the whole string must match, so `git push *` matches `git push` and `git push origin` but not
-  `cd repo && git push`; write `*git push*` to catch it anywhere. A trailing ` *` also matches the
+  `cd repo && git push` as a whole `all-tools` command; write `*git push*` to catch it anywhere.
+  (In `on-ask` mode OpenCode already splits a command line into its commands, so a pattern never
+  spans `&&`.) A trailing ` *` also matches the
   bare command. Matching ignores case, shell line continuations and runs of whitespace, in patterns
   and values alike. It never goes through a regular expression, so it cannot backtrack: the cost
   grows with the value's and the pattern's length. Paths may arrive relative to the project in
