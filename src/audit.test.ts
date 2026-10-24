@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,12 +13,12 @@ import {
 import type { AuditLogEntry } from "./audit.js";
 import { parsePluginConfiguration } from "./config.js";
 import type { ReviewRequest } from "./reviewer.js";
+import { testProjectDirectory } from "./test-directory.js";
 
 const directories: string[] = [];
 async function directory() {
-  const path = join(process.cwd(), "tmp", "tests", "projects", randomUUID());
+  const path = testProjectDirectory();
   directories.push(path);
-  await mkdir(path, { recursive: true });
   return path;
 }
 afterEach(async () => {

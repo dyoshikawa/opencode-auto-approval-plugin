@@ -193,11 +193,16 @@ reviewer does, including the decision backend's `onOversize: "agent"` fallback.
     without network access or web search, with `approval_policy = "never"` so that no request
     can lift the sandbox (a command the sandbox blocks fails), and without the project's
     `AGENTS.md` or `.codex/config.toml`: the review marks the project directory and every
-    directory above it as untrusted, so the project's `.codex/config.toml` cannot add MCP
-    servers or change any other setting even when you trusted the project in Codex. Your own
+    directory above it as untrusted — and, when the project path goes through a symlink, its
+    resolved path and the directories above that too — so the project's `.codex/config.toml`
+    cannot add MCP servers or change any other setting even when you trusted the project in
+    Codex. This override was verified on Linux and macOS paths only; on Windows, Codex's
+    matching of drive letters, separators and UNC paths was not tested. Your own
     Codex config (`$CODEX_HOME/config.toml`, `~/.codex/config.toml` by default) and any
     system-managed config still load, MCP servers included. With
-    `reviewer.agent.codexSdk.path`, the SDK there must be 0.163.0 or newer.
+    `reviewer.agent.codexSdk.path` or an installed copy, the SDK must be 0.163.0 or newer (a
+    prerelease of 0.163.0 is refused). The CommonJS build cannot locate an installed copy's
+    version, so it needs `reviewer.agent.codexSdk.path`.
 - Both can read files outside the project: Claude Code when its auto-mode classifier judges the
   read safe (measured on 2026-10-17, it read `/etc/hostname` and searched `/home` when asked to),
   Codex because its read-only sandbox can read the whole disk. What it reads reaches the model
@@ -452,6 +457,11 @@ alone, and the plugin needs an API key of its own.
     2 CJK characters or 6 other characters a token) means part of the prompt was not read — zero or no count says
     nothing, and cached tokens count as read;
   - the task, the untrusted-data rule and the answer format are restated after the operation data.
+
+  With every backend, a reply that holds two verdicts carrying the check is refused. In a reply with
+  more than 40 opening or closing braces, which the parser does not search whole, the word
+  `verdict` (in any case) or the check appearing more than once, or any `\u` escape, is refused
+  the same way, so a brace-heavy answer that discusses verdicts in its reasoning goes to a human.
 
   A cut that keeps the start can still go unnoticed if it is under about two fifths of English
   prose, two thirds of code or JSON, or half of Japanese; size `maxInputBytes` to the server's
