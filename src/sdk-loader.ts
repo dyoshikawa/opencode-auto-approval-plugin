@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import * as z from "zod/mini";
 
@@ -19,9 +19,15 @@ export async function importSdk(input: {
   /** Imports the package by name; a literal specifier keeps it external to the bundle. */
   importInstalled: () => Promise<unknown>;
   /**
-   * The lowest `major.minor.patch` a configured package directory may hold.
-   * An older SDK can silently ignore an option the reviewer relies on for
-   * safety, so it is refused instead of loaded.
+   * The URL of the installed package's entry, from `import.meta.resolve` with
+   * the same literal specifier; needed to check `minimumVersion` there too.
+   */
+  resolveInstalled?: () => string;
+  /**
+   * The lowest `major.minor.patch` the SDK may have, configured directory
+   * or installed copy alike; a prerelease of it is older. An older SDK can
+   * silently ignore an option the reviewer relies on for safety, so it is
+   * refused instead of loaded.
    */
   minimumVersion?: string;
 }): Promise<Record<string, unknown>> {
@@ -30,16 +36,33 @@ export async function importSdk(input: {
   // load the plugin for everyone who does not use this runtime.
   try {
     if (input.sdkPath === undefined) {
+      if (input.minimumVersion !== undefined) {
+        // A peer range is not enforced everywhere (legacy peer deps, a
+        // hoisted copy), so the installed version is checked as well.
+        const version = await installedVersion({
+          packageName: input.packageName,
+          resolve: input.resolveInstalled,
+        });
+        assertMinimumVersion({
+          ...input,
+          minimumVersion: input.minimumVersion,
+          version,
+          from: "the installed package",
+        });
+      }
       module = await input.importInstalled();
     } else {
       const { entry, version } = await packageEntry({
         directory: input.sdkPath,
         packageName: input.packageName,
       });
-      if (input.minimumVersion !== undefined && !atLeast(version, input.minimumVersion)) {
-        throw new SdkVersionError(
-          `${input.packageName} ${version ?? "(no version)"} from ${input.option} is older than the required ${input.minimumVersion}. Install a newer version.`,
-        );
+      if (input.minimumVersion !== undefined) {
+        assertMinimumVersion({
+          ...input,
+          minimumVersion: input.minimumVersion,
+          version,
+          from: input.option,
+        });
       }
       module = await import(pathToFileURL(entry).href);
     }
@@ -60,21 +83,65 @@ export async function importSdk(input: {
 
 class SdkVersionError extends Error {}
 
-function parseVersion(value: string | undefined): number[] | undefined {
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(value ?? "");
-  return match === null ? undefined : match.slice(1, 4).map(Number);
+function assertMinimumVersion(input: {
+  packageName: string;
+  version: string | undefined;
+  minimumVersion: string;
+  from: string;
+}): void {
+  if (atLeast(input.version, input.minimumVersion)) return;
+  throw new SdkVersionError(
+    `${input.packageName} ${input.version ?? "(no version)"} from ${input.from} is older than the required ${input.minimumVersion}. Install a newer version.`,
+  );
 }
 
-/** Whether `version`'s `major.minor.patch` is at least `minimum`'s; a missing or unreadable version is not. */
-function atLeast(version: string | undefined, minimum: string): boolean {
+function parseVersion(
+  value: string | undefined,
+): { parts: number[]; prerelease: boolean } | undefined {
+  const match = /^(\d+)\.(\d+)\.(\d+)(-)?/.exec(value ?? "");
+  return match === null
+    ? undefined
+    : { parts: match.slice(1, 4).map(Number), prerelease: match[4] !== undefined };
+}
+
+/**
+ * Whether `version` is at least `minimum` by semver precedence on
+ * `major.minor.patch`, a prerelease ranking below its release; a missing or
+ * unreadable version is not.
+ */
+export function atLeast(version: string | undefined, minimum: string): boolean {
   const have = parseVersion(version);
   const need = parseVersion(minimum);
   if (have === undefined || need === undefined) return false;
-  for (const [index, part] of have.entries()) {
-    const required = need[index] ?? 0;
+  for (const [index, part] of have.parts.entries()) {
+    const required = need.parts[index] ?? 0;
     if (part !== required) return part > required;
   }
-  return true;
+  return !have.prerelease || need.prerelease;
+}
+
+/** The version in the manifest of the installed package, found above its resolved entry. */
+async function installedVersion(input: {
+  packageName: string;
+  resolve: (() => string) | undefined;
+}): Promise<string | undefined> {
+  if (input.resolve === undefined) return undefined;
+  let directory = dirname(fileURLToPath(input.resolve()));
+  for (;;) {
+    try {
+      const manifest = z.safeParse(
+        manifestSchema,
+        JSON.parse(await readFile(join(directory, "package.json"), "utf8")),
+      );
+      if (manifest.success && manifest.data.name === input.packageName) {
+        return manifest.data.version;
+      }
+    } catch {
+      // No manifest here; keep walking up.
+    }
+    if (dirname(directory) === directory) return undefined;
+    directory = dirname(directory);
+  }
 }
 
 const exportTargetSchema = z.union([

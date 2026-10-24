@@ -165,7 +165,9 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       // is forgotten the moment a review ends, while an interrupted reviewer
       // session may still be winding down under its agent. The name only
       // counts when this plugin defined that agent as read-only; with a decision model an
-      // agent of that name is someone else's and must be reviewed.
+      // agent of that name is someone else's and must be reviewed. Skipping
+      // fails closed only where a skipped event is left at `ask`; all-tools
+      // (below) trusts the session ID alone.
       const isReviewer = (event: { sessionID: string; agent?: string }): boolean =>
         (usesAgentReviewer(configuration) && event.agent === reviewerAgentName) ||
         reviewer.isReviewerSession({ sessionID: event.sessionID });
@@ -302,7 +304,11 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       }
 
       await context.tool.hook("execute.before", async (event) => {
-        if (isReviewer(event)) return;
+        // A skipped call runs without a review, so the agent name is not enough: a
+        // session the host started under that agent (a task, say) is reviewed
+        // like any other. A winding-down reviewer session's late read is
+        // reviewed once at worst.
+        if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
 
         const key = grantKey(event);
         nativeGrants.delete(key);

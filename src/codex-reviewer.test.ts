@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import type { CodexOptions, ThreadOptions, TurnOptions } from "@openai/codex-sdk";
 import { describe, expect, it } from "vitest";
@@ -8,14 +7,8 @@ import { describe, expect, it } from "vitest";
 import { CodexReviewer, type CreateCodex, loadCodex } from "./codex-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
 import { OversizeError, type ReviewRequest } from "./reviewer.js";
+import { testProjectDirectory as testDirectory } from "./test-directory.js";
 import type { UsageRecord } from "./usage.js";
-
-/** A fresh directory under ./tmp/tests/projects, symlinks resolved (macOS's tmp dirs are symlinked). */
-function testDirectory(): string {
-  const path = join(process.cwd(), "tmp", "tests", "projects", randomUUID());
-  mkdirSync(path, { recursive: true });
-  return realpathSync(path);
-}
 
 const request: ReviewRequest = {
   source: "permission-request",
@@ -80,9 +73,17 @@ describe("CodexReviewer", () => {
   it("reviews in a read-only Codex thread that never asks for approval", async () => {
     const codex = fakeCodex();
     const records: UsageRecord[] = [];
+    // A real, symlink-free directory, so the expected overrides do not depend
+    // on what exists on the machine running the test.
+    const project = testDirectory();
+    const ancestors: string[] = [];
+    for (let current = project; ; current = dirname(current)) {
+      ancestors.push(current);
+      if (dirname(current) === current) break;
+    }
     const reviewer = new CodexReviewer({
       configuration: configuration({ model: "gpt-5.6-codex" }),
-      directory: "/work/project",
+      directory: project,
       loadCodex: async () => codex,
       recordUsage: (record) => records.push(record),
       project: "project-id",
@@ -97,16 +98,17 @@ describe("CodexReviewer", () => {
       {
         config: expect.objectContaining({ project_doc_max_bytes: 0 }),
         // The project's .codex/config.toml (and its MCP servers) must not load.
-        // /work/project does not exist, so no symlink-resolved entries are added.
         configOverrides: [
-          'projects={ "/work/project" = { trust_level = "untrusted" }, "/work" = { trust_level = "untrusted" }, "/" = { trust_level = "untrusted" } }',
+          `projects={ ${ancestors
+            .map((path) => `${JSON.stringify(path)} = { trust_level = "untrusted" }`)
+            .join(", ")} }`,
         ],
       },
     ]);
     expect(codex.threads).toEqual([
       {
         model: "gpt-5.6-codex",
-        workingDirectory: "/work/project",
+        workingDirectory: project,
         skipGitRepoCheck: true,
         sandboxMode: "read-only",
         approvalPolicy: "never",
@@ -260,7 +262,7 @@ describe("loadCodex", () => {
     ).resolves.toBeTypeOf("function");
   });
 
-  it("refuses a configured SDK older than the first one with configOverrides", async () => {
+  it("refuses a configured SDK older than the one the trust override was verified with", async () => {
     const root = testDirectory();
     try {
       writeFileSync(

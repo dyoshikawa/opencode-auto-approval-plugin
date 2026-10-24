@@ -782,6 +782,33 @@ describe("V2 plugin (opencode 2.x)", () => {
     );
   });
 
+  it("reviews an all-tools call under the reviewer agent's name from a session it did not create", async () => {
+    const { context, hooks } = createContext({ options: { mode: "all-tools" } });
+    const { plugin, review } = createPlugin({ verdict: "deny" });
+    await plugin.setup(context as never);
+
+    await expect(
+      hooks["tool.execute.before"]?.({
+        tool: "write",
+        sessionID: "task-session",
+        agent: "auto-approval-reviewer",
+        input: { filePath: "README.md" },
+      }),
+    ).rejects.toThrow("Auto-approval reviewer denied");
+    expect(review).toHaveBeenCalledTimes(1);
+
+    // Its own review sessions are still exempt.
+    await expect(
+      hooks["tool.execute.before"]?.({
+        tool: "read",
+        sessionID: "review-session",
+        agent: "auto-approval-reviewer",
+        input: { filePath: "README.md" },
+      }),
+    ).resolves.toBeUndefined();
+    expect(review).toHaveBeenCalledTimes(1);
+  });
+
   it("reports a reviewer failure as a blocked tool call", async () => {
     const { context, hooks } = createContext({ options: { mode: "all-tools" } });
     const { plugin, review } = createPlugin({ verdict: "allow" });

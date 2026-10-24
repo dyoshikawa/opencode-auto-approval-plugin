@@ -169,6 +169,13 @@ export function parseVerdict(input: string, expectedCheck: string): ReviewVerdic
   ) {
     throw new Error("Reviewer response held conflicting verdicts.");
   }
+  // The search above only tries the last MAX_JSON_CANDIDATES braces. A check
+  // before them could belong to a verdict it never parsed, so the reply
+  // cannot be shown to be unambiguous.
+  const firstCheck = input.indexOf(expectedCheck);
+  if (firstCheck !== -1 && firstCheck < scannedFrom(input)) {
+    throw new Error("Reviewer response held too many braces to rule out conflicting verdicts.");
+  }
   if (!hasCheck(parsed.check, expectedCheck)) {
     throw new OversizeError(
       "The reviewer's answer lacked the review check from the start of its prompt, so it likely did not read the whole operation.",
@@ -220,6 +227,12 @@ function verdictObjects(input: string): VerdictObject[] {
 
 /** Bounds the search in a reply full of braces. */
 const MAX_JSON_CANDIDATES = 40;
+
+/** Where the earliest object `verdictObjects` tries may start; 0 when it tries them all. */
+function scannedFrom(input: string): number {
+  const starts = [...input.matchAll(/\{/g)].map((match) => match.index);
+  return starts.length <= MAX_JSON_CANDIDATES ? 0 : (starts.at(-MAX_JSON_CANDIDATES) ?? 0);
+}
 
 function isVerdict(input: unknown): input is ReviewVerdict["verdict"] {
   return input === "allow" || input === "deny" || input === "escalate";

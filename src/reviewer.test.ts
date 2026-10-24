@@ -121,6 +121,22 @@ describe("parseVerdict", () => {
     expect(() => parseVerdict(reply, check)).toThrow("conflicting verdicts");
   });
 
+  it("refuses a check-bearing deny hidden before the last 40 braces", () => {
+    const reply = [
+      `{"verdict":"deny","reason":"Sends secrets away.","check":"${check}"}`,
+      "{}".repeat(40),
+      `{"verdict":"allow","reason":"ok","check":"${check}"}`,
+    ].join("\n");
+
+    expect(() => parseVerdict(reply, check)).toThrow("too many braces");
+  });
+
+  it("reads an answer after many braces that hold no check", () => {
+    const reply = `${"{}".repeat(60)}\n{"verdict":"allow","reason":"ok","check":"${check}"}`;
+
+    expect(parseVerdict(reply, check)).toEqual({ verdict: "allow", reason: "ok" });
+  });
+
   it("refuses an answer followed by more text", () => {
     const reply = [
       `{"verdict":"deny","reason":"Sends secrets away.","check":"${check}"}`,
