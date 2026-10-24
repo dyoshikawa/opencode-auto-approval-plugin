@@ -495,7 +495,9 @@ workspace. That state goes to the reviewer's provider, so treat it as sent there
   shell syntax, `.`, `/`, `~`, `:` or `@` — no path, host or URL — is ever replaced, and
   `SSH_AUTH_SOCK=` / `*_PATH=` values stay visible. A short password, a secret in another shape, an
   SDK runtime's own key in the environment, or one the reviewer reads from a file still reaches
-  the provider. Add your own regular expressions with `reviewer.redact.patterns` (a match is
+  the provider, and so does a value in a variable the same command expands (`$NAME`), since it
+  may decide what runs. Strings over 256 KiB are only checked for the API keys, private keys and
+  token formats. Add your own regular expressions with `reviewer.redact.patterns` (a match is
   replaced only when it is secret-shaped, and a pattern that matches the empty string is
   rejected), or turn redaction off with `reviewer.redact.enabled: false` when the reviewer must see
   the values.

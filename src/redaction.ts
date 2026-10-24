@@ -49,10 +49,18 @@ const wellKnownTokens =
  * from the reviewer.
  */
 const secretValue =
-  "(?:[A-Za-z0-9_+=-]{16,4096}|[A-Za-z0-9_-]{8,2048}\\.[A-Za-z0-9_-]{8,2048}\\.[A-Za-z0-9_-]{8,2048})";
+  "(?:[A-Za-z0-9_+=-]{16,256}|[A-Za-z0-9_-]{8,1024}\\.[A-Za-z0-9_-]{8,1024}\\.[A-Za-z0-9_-]{8,1024})";
 const secretOnly = new RegExp(`^${secretValue}$`);
 /** A variable that holds a credential, not one that points at it (`*_PATH`, `SSH_AUTH_SOCK`). */
 const secretName = /(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$/i;
+/** Not a character of a secret-shaped value, nor of a path, host or URL it could run into. */
+const valueEnd = "(?![A-Za-z0-9_+=./~:@-])";
+/**
+ * Beyond this, a string is only checked for the API keys, private keys and
+ * token formats, whose patterns stay cheap; the contextual ones cost
+ * seconds on a few megabytes of file content.
+ */
+const maxContextualLength = 262_144;
 
 /**
  * Replaces credentials in what a reviewer is shown, conservatively: only a
@@ -74,36 +82,44 @@ export function redactForReview(input: {
   for (const pattern of input.patterns) {
     text = text.replace(pattern, (match) => (secretOnly.test(match) ? "[REDACTED]" : match));
   }
-  const end = "(?![A-Za-z0-9_+=./~:@-])";
+  text = text.replace(
+    /-----BEGIN ([A-Z ]{0,40})PRIVATE KEY-----[A-Za-z0-9+/=\s]{1,100000}?-----END \1PRIVATE KEY-----/g,
+    "[REDACTED_PRIVATE_KEY]",
+  );
+  if (text.length <= maxContextualLength) text = redactInContext(text);
   return text
     .replace(
-      /-----BEGIN ([A-Z ]{0,40})PRIVATE KEY-----[A-Za-z0-9+/=\s]{1,100000}?-----END \1PRIVATE KEY-----/g,
-      "[REDACTED_PRIVATE_KEY]",
+      /((?:https?|ftp|ssh):\/\/[A-Za-z0-9._~%+-]{1,256}):[A-Za-z0-9._~%+-]{1,256}@/gi,
+      "$1:[REDACTED]@",
     )
+    .replace(wellKnownTokens, "[REDACTED_TOKEN]");
+}
+
+/** Secret-shaped values after a header, a flag or a variable that names them as credentials. */
+function redactInContext(text: string): string {
+  return text
     .replace(
       new RegExp(
-        `\\b((?:(?:Proxy-)?Authorization|X-API-Key|X-Auth-Token):[ \\t]{0,8}(?:(?:Bearer|Basic|Token)[ \\t]{1,8})?|Bearer[ \\t]{1,8})${secretValue}${end}`,
+        `\\b((?:(?:Proxy-)?Authorization|X-API-Key|X-Auth-Token):[ \\t]{0,8}(?:(?:Bearer|Basic|Token)[ \\t]{1,8})?|Bearer[ \\t]{1,8})${secretValue}${valueEnd}`,
         "gi",
       ),
       "$1[REDACTED]",
     )
     .replace(
       new RegExp(
-        `(--(?:password|token|api-key|secret|apikey)(?:=|[ \\t]{1,8}))(["']?)${secretValue}\\2${end}`,
+        `(--(?:password|token|api-key|secret|apikey)(?:=|[ \\t]{1,8}))(["']?)${secretValue}\\2${valueEnd}`,
         "gi",
       ),
       "$1$2[REDACTED]$2",
     )
     .replace(
-      new RegExp(`\\b([A-Za-z_][A-Za-z0-9_]{0,63})=(["']?)${secretValue}\\2${end}`, "g"),
+      new RegExp(`\\b([A-Za-z_][A-Za-z0-9_]{0,63})=(["']?)${secretValue}\\2${valueEnd}`, "g"),
       (match, name: string, quote: string) =>
-        secretName.test(name) ? `${name}=${quote}[REDACTED]${quote}` : match,
-    )
-    .replace(
-      /((?:https?|ftp|ssh):\/\/[A-Za-z0-9._~%+-]{1,256}):[A-Za-z0-9._~%+-]{1,256}@/gi,
-      "$1:[REDACTED]@",
-    )
-    .replace(wellKnownTokens, "[REDACTED_TOKEN]");
+        // A value the same text expands (`$NAME`) may decide what runs.
+        secretName.test(name) && !text.includes(`$${name}`) && !text.includes(`\${${name}`)
+          ? `${name}=${quote}[REDACTED]${quote}`
+          : match,
+    );
 }
 
 /**
