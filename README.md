@@ -629,7 +629,7 @@ with the matched rule as the reason. Rules are off by default.
   `apply_patch` and friends), so write path rules with `"action": "*"` when they must hold in both
   modes.
 - `resource` is matched against string **values** — a permission request's resources, patterns
-  and metadata (except the diffs and previews in it) and every string in a tool input, nested
+  and metadata (except the diffs, patches and previews in it) and every string in a tool input, nested
   values included —
   each as a whole, line by line and word by word. Quotes and shell operators separate words, so
   `*.env` catches `cat ".env"`, `cat .env | head` and `$(cat .env)`. Two exceptions, for built-in

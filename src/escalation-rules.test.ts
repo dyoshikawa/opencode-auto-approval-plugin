@@ -167,6 +167,40 @@ describe("EscalationRulesReviewer", () => {
     expect((await reviewer.review(metadataAsk("/w/src/a.ts"))).verdict).toBe("allow");
   });
 
+  it.each([
+    // OpenCode 2.x write/edit/patch asks
+    {
+      resources: ["src/a.ts"],
+      metadata: {
+        files: [{ file: "src/a.ts", patch: "+const u = process.env.URL;", status: "modified" }],
+      },
+    },
+    // OpenCode 1.x apply_patch asks
+    {
+      pattern: ["src/a.ts"],
+      metadata: {
+        filepath: "/w/src/a.ts",
+        diff: "+const env = import.meta.env;",
+        files: [{ filePath: "/w/src/a.ts", patch: "+const env = import.meta.env;" }],
+      },
+    },
+  ])("does not match the diffs of a real edit ask (%#)", async (resource) => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [
+        { action: "*", resource: "*.env" },
+        { action: "*", resource: "*.env.*" },
+      ],
+    });
+    const decision = await reviewer.review({
+      source: "permission-request",
+      sessionID: "s",
+      action: "edit",
+      resource,
+    });
+    expect(decision.verdict).toBe("allow");
+  });
+
   it("reports the first matching rule in configuration order", async () => {
     const reviewer = new EscalationRulesReviewer({
       reviewer: permissiveReviewer(),
@@ -312,6 +346,10 @@ describe("EscalationRulesReviewer", () => {
     });
     const patchText = "*** Begin Patch\n  *** Update File: .env\n@@\n-A=1\n+A=2\n*** End Patch";
     expect((await reviewer.review(toolCall("apply_patch", { patchText }))).verdict).toBe(
+      "escalate",
+    );
+    const nbsp = "*** Begin Patch\n\u00a0*** Update File: .env\n@@\n*** End Patch";
+    expect((await reviewer.review(toolCall("patch", { patchText: nbsp }))).verdict).toBe(
       "escalate",
     );
   });

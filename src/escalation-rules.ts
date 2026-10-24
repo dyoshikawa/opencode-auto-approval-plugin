@@ -78,9 +78,15 @@ function matchingRule(input: {
 /** Built-in file tools whose content keys say what is written, not where. */
 const fileTools = new Set(["write", "edit", "multiedit"]);
 const contentKeys = new Set(["content", "oldstring", "newstring"]);
-/** Derived text in a permission request's metadata: diffs and previews, not where or how. */
+/**
+ * Derived text in a permission request's metadata — diffs (`diff`, and the
+ * `patch` of each entry in `files`), contents and previews — not where or how.
+ */
 const metadataContentKeys = new Set([
   "diff",
+  "patch",
+  "before",
+  "after",
   "content",
   "oldstring",
   "newstring",
@@ -89,8 +95,8 @@ const metadataContentKeys = new Set([
 ]);
 /** Built-in patch tools, matched through the file paths their headers name. */
 const patchTools = new Set(["apply_patch", "patch"]);
-// OpenCode trims a header line before reading it, so indentation is allowed.
-const patchPath = /^[ \t]*\*\*\* (?:add file|update file|delete file|move to): (.+)$/gim;
+// OpenCode trims a header line before reading it, so any leading whitespace is allowed.
+const patchPath = /^\s*\*\*\* (?:add file|update file|delete file|move to): (.+)$/gim;
 /** Words: a path or flag stays one candidate whatever quotes or operators wrap it. */
 const separators = /[\s"'`;|&<>(){}=]+/;
 
