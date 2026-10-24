@@ -129,9 +129,9 @@ by default for auditing the decision.
 
 Set `reviewer.agent.cleanupSessions: true` to delete reviewer sessions after a
 decision. Deletion is best-effort and **never delays** the verdict or timeout.
-This applies only to the OpenCode V2 agent runtime: setting it with the Claude/Codex
-SDK runtimes (even to `false`) or on OpenCode 1.x is rejected at startup, since
-it would have no effect there.
+This applies only to the OpenCode V2 agent runtime: setting it at all with the
+Claude/Codex SDK runtimes (even to `false`), or setting it to `true` on OpenCode 1.x,
+is rejected at startup, since it would have no effect there.
 
 ```json
 {
