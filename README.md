@@ -484,20 +484,28 @@ when you enable it. The agent backend also sees whatever its read-only tools rea
 workspace. That state goes to the reviewer's provider, so treat it as sent there.
 
 - **Credentials are redacted by default.** Before a review starts, every string in that state is
-  copied with common credentials replaced: the reviewer API keys in use, private key blocks,
-  authorization headers, `--password`/`--token`-style flags, `*_KEY=` / `*_TOKEN=` /
-  `*_SECRET=`-style assignments, URL user info and well-known token formats (GitHub, OpenAI,
-  GitLab, TypeSafe). The tool OpenCode runs is never changed. This is best effort: a secret in
-  another shape, or one the reviewer reads from a file, still reaches the provider. Add your own
-  regular expressions with `reviewer.redact.patterns`, or turn it off with
-  `reviewer.redact.enabled: false` when the reviewer must see the values.
+  copied with credential values replaced by markers such as `[REDACTED]`: the `reviewer.decision` /
+  `reviewer.chat` API keys, complete private key blocks, authorization headers and `Bearer` /
+  `Basic` values, `--password`/`--token`-style flags, `*_KEY=` / `*_TOKEN=` / `*_SECRET=`-style
+  assignments, URL user info and well-known token formats (GitHub, OpenAI, GitLab, TypeSafe). The
+  tool OpenCode runs is never changed, and the reviewer is told what the markers mean.
+  Redaction is deliberately conservative: it only replaces a value made of credential characters
+  (letters, digits and `._~+/=:@%,!-`), never across a quote, a space, `$`, a backtick, a bracket or a
+  shell operator, so crafted text cannot make it hide part of a command from the reviewer. A
+  secret in another shape (with `$` or spaces in it, an SDK runtime's own key in the environment,
+  or one the reviewer reads from a file) still reaches the provider. Add your own regular
+  expressions with `reviewer.redact.patterns` (matched case-sensitively; a match is replaced only
+  when it is made of credential characters, and a pattern that matches the empty string is
+  rejected), or turn redaction off with `reviewer.redact.enabled: false` when the reviewer must see
+  the values.
 - **Size is bounded and fails closed.** An operation larger than `reviewer.agent.maxInputBytes`,
   `reviewer.chat.maxInputBytes` or `reviewer.decision.maxStateTokens` is never sent in part; it
   escalates to a human, or goes to the [fallback](#operations-too-large-for-the-decision-model)
   you configured.
 - **Reviews in flight are capped.** At most `reviewer.maxConcurrentReviews` (default 4, 1–32)
   reviews run at once; more wait for a free slot for up to `reviewer.timeoutMs` and then escalate.
-  Each review is also bounded by `reviewer.timeoutMs`. There is no spending cap: watch the cost
+  The review itself is then bounded by `reviewer.timeoutMs` again, so a queued operation can take up
+  to twice that before it is decided. There is no spending cap: watch the cost
   with [`stats`](#usage-and-cost-statistics) and your provider's own limits.
 
 ```jsonc

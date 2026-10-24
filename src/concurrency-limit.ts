@@ -26,7 +26,7 @@ export class ConcurrencyLimitedReviewer implements Reviewer {
     if (!(await this.#acquire())) {
       return {
         verdict: "escalate",
-        reason: `More than ${this.#maxConcurrent} reviews were already running; a human should review it.`,
+        reason: `All ${this.#maxConcurrent} review slots stayed busy; a human should review it.`,
       };
     }
     try {

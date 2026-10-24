@@ -270,10 +270,10 @@ const decisionOptionsSchema = z.discriminatedUnion("provider", [
   }),
 ]);
 
+/** A pattern that compiles and cannot match the empty string (it would match everywhere). */
 function isRegExp(source: string): boolean {
   try {
-    new RegExp(source, "g");
-    return true;
+    return !new RegExp(source).test("");
   } catch {
     return false;
   }

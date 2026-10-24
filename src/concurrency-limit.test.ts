@@ -6,13 +6,16 @@ import type { ReviewVerdict } from "./reviewer.js";
 /** A reviewer whose reviews finish only when the test releases them. */
 function gatedReviewer() {
   const pending: (() => void)[] = [];
+  const started: string[] = [];
   let running = 0;
   let peak = 0;
   return {
     pending,
+    started,
     peak: () => peak,
     isReviewerSession: () => false,
-    review: async (): Promise<ReviewVerdict> => {
+    review: async (input: { sessionID: string }): Promise<ReviewVerdict> => {
+      started.push(input.sessionID);
       running++;
       peak = Math.max(peak, running);
       await new Promise<void>((resolve) => pending.push(resolve));
@@ -36,7 +39,9 @@ describe("ConcurrencyLimitedReviewer", () => {
       maxConcurrent: 2,
       waitMs: 10_000,
     });
-    const reviews = Array.from({ length: 5 }, () => reviewer.review(request));
+    const reviews = Array.from({ length: 5 }, (_, index) =>
+      reviewer.review({ ...request, sessionID: `s${index}` }),
+    );
     await settle();
     expect(inner.pending).toHaveLength(2);
     while (inner.pending.length > 0) {
@@ -45,6 +50,7 @@ describe("ConcurrencyLimitedReviewer", () => {
     }
     await expect(Promise.all(reviews)).resolves.toHaveLength(5);
     expect(inner.peak()).toBe(2);
+    expect(inner.started).toEqual(["s0", "s1", "s2", "s3", "s4"]);
   });
 
   it("escalates a review that waited longer than waitMs for a slot", async () => {
@@ -57,7 +63,7 @@ describe("ConcurrencyLimitedReviewer", () => {
     const first = reviewer.review(request);
     await expect(reviewer.review(request)).resolves.toEqual({
       verdict: "escalate",
-      reason: "More than 1 reviews were already running; a human should review it.",
+      reason: "All 1 review slots stayed busy; a human should review it.",
     });
     inner.pending.shift()?.();
     await expect(first).resolves.toMatchObject({ verdict: "allow" });

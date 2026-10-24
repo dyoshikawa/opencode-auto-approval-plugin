@@ -55,6 +55,7 @@ describe("parsePluginConfiguration", () => {
       { reviewer: { maxConcurrentReviews: 1.5 } },
       { reviewer: { redact: { patterns: ["("] } } },
       { reviewer: { redact: { patterns: [""] } } },
+      { reviewer: { redact: { patterns: ["a*"] } } },
     ]) {
       expect(() => parsePluginConfiguration({ options })).toThrow(
         "Invalid auto-approval plugin options",
