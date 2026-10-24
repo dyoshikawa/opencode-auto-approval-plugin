@@ -32,10 +32,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --ignore-scripts
 
+      # `--ignore-scripts` skips `prepare`, so regenerate the AI tool
+      # configurations explicitly: a broken generator or committed output
+      # that lags behind it then fails here.
+      - name: Generate AI tool configurations
+        run: pnpm generate
+
       - name: Check no files generated
         run: |
           if [ -n "$(git status --porcelain)" ]; then
-            echo "Error: Files were generated or modified after pnpm install"
+            echo "Error: Files were generated or modified after pnpm install and pnpm generate"
             git status --porcelain
             exit 1
           fi
