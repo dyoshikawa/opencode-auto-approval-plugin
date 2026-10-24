@@ -146,6 +146,7 @@ describe("parseVerdict", () => {
     ],
     [
       "an escaped verdict key",
+      // cspell:disable-next-line
       `{"\\u0076erdict":"deny","reason":"no","check":"CHECK"}${"{}".repeat(40)}\n{"verdict":"allow","reason":"ok","check":"CHECK"}`,
     ],
     [
