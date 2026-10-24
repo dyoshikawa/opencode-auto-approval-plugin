@@ -120,6 +120,7 @@ describe("redactForReview", () => {
     redact(`Authorization${" ".repeat(200_000)},`);
     redact(`a${"_key".repeat(200_000)}`);
     redact(`TOKEN=${"a".repeat(1_000_000)}`);
+    redact(` sk-${"a".repeat(6_000_000)}.`);
     redact("a=".repeat(200_000));
     // Just under the size the contextual patterns still run on.
     redact("a=".repeat(130_000));

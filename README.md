@@ -501,7 +501,8 @@ workspace. That state goes to the reviewer's provider, so treat it as sent there
   token formats. Add up to 50 regular expressions of up to 500 characters with
   `reviewer.redact.patterns` (a match is replaced only when it is itself secret-shaped — 16 or more
   of `[A-Za-z0-9_+=-]`, or a JWT — and a pattern that matches the empty string is rejected), or turn redaction off with `reviewer.redact.enabled: false` when the reviewer must see
-  the values.
+  the values. Like `instructions`, set `reviewer.redact` only in configuration you trust: a broad pattern
+  can hide what a reviewer should see.
 - **Size is bounded and fails closed.** An operation larger than `reviewer.agent.maxInputBytes`,
   `reviewer.chat.maxInputBytes` or `reviewer.decision.maxStateTokens` is never sent in part; it
   escalates to a human, or goes to the [fallback](#operations-too-large-for-the-decision-model)
@@ -648,6 +649,77 @@ unknown or the operation is ambiguous, and your instructions can only argue agai
   what must still go to a human.
 - Like `instructions`, set it only in configuration you trust — not in a repository's
   `opencode.json` you have not reviewed.
+
+### Escalate rules (deterministic)
+
+`reviewer.instructions` are guidance a model may still get wrong, and an injected or misled reviewer
+can answer `allow` to anything. `escalate` lists operations that always go to a human: a matching
+operation is escalated **before any reviewer sees it**, with every backend and both plugin API
+generations. In `on-ask` mode the OpenCode prompt stays; in `all-tools` mode the tool is blocked
+with the matched rule as the reason. Rules are off by default.
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": {
+        "escalate": [
+          // Publishing, pushing and destroying (`shell` on OpenCode 2.x, `bash` on 1.x)
+          { "action": "shell", "resource": "*git push*" },
+          { "action": "shell", "resource": "*npm publish*" },
+          { "action": "shell", "resource": "*rm -rf*" },
+          // Network access
+          { "action": "webfetch" },
+          { "action": "shell", "resource": "*curl *" },
+          // Credentials, by path
+          { "action": "*", "resource": "*.env" },
+          { "action": "*", "resource": "*.env.*" },
+          { "action": "*", "resource": "*id_rsa*" },
+        ],
+      },
+    },
+  ],
+}
+```
+
+- `action` is matched against the OpenCode permission action in `on-ask` mode and the tool name in
+  `all-tools` mode. The shell is `shell` on OpenCode 2.x and `bash` on 1.x; list both when one
+  configuration serves both. One permission action can cover several tools (`edit` covers `write`,
+  `apply_patch` and friends), so write path rules with `"action": "*"` when they must hold in both
+  modes.
+- `resource` is matched against string **values** — a permission request's resources, patterns
+  and metadata (except the diffs, patches and previews in it) and every string in a tool input, nested
+  values included —
+  each as a whole, line by line and word by word. Quotes and shell operators separate words, so
+  `*.env` catches `cat ".env"`, `cat .env | head` and `$(cat .env)`. Two exceptions, for built-in
+  tools only: what `write`, `edit` and `multiedit` write (`content`, `oldString`, `newString`) is
+  not matched, so a path rule does not fire on code that mentions `process.env`, and the
+  `patchText` of `apply_patch` / `patch` is matched through the file paths its `*** Add File:` /
+  `Update File:` / `Delete File:` / `Move to:` headers name. Every other tool, MCP tools included,
+  has all its strings matched, contents too. Object keys, numbers and booleans are not matched. A
+  rule without `resource` matches every operation of its action. An operation more than 16 levels
+  deep, with more than 10,000 strings or more than a million characters to match (counting each
+  distinct whole string, line and word) escalates under any rule for its action.
+- Patterns use OpenCode's wildcards: `*` matches anything (including nothing), `?` one character,
+  and the whole string must match, so `git push *` matches `git push` and `git push origin` but not
+  `cd repo && git push` as a whole `all-tools` command; write `*git push*` to catch it anywhere.
+  (In `on-ask` mode OpenCode already splits a command line into its commands, so a pattern never
+  spans `&&`.) A trailing ` *` also matches the
+  bare command. Matching ignores case, shell line continuations and runs of whitespace, in patterns
+  and values alike. It never goes through a regular expression, so it cannot backtrack: the cost
+  grows with the value's and the pattern's length. Paths may arrive relative to the project in
+  `on-ask` mode (`.env`) and absolute in `all-tools` mode, so start path patterns with `*`.
+- The first matching rule, in configuration order, is the one reported. Escalations from a rule
+  are written to the [audit log](#audit-log-opt-in) like any verdict. At most 200 rules; an
+  `action` is at most 200 characters and a `resource` at most 1,000.
+- Rules are a deterministic floor, not a sandbox. A shell command can spell the same thing many
+  ways (`g""it push`, a variable, a script file, an alias) and a URL can be percent-encoded, which
+  no pattern lists. In `on-ask` mode a rule only sees what OpenCode already asks about. The
+  reviewer's own read-only session is not checked against the rules. Keep OpenCode `deny`
+  permissions for what must never run; they stay authoritative whatever the reviewer says.
+- With `allToolsNativeAsks: "review"`, a same-action native ask is answered from the reviewed call,
+  which the rules already checked; its own resources are not matched again.
 
 ### Audit log (opt-in)
 

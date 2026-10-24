@@ -100,7 +100,9 @@ export function redactForReview(input: {
  * name (`./sk-…`), where replacing it would hide what runs.
  */
 const wellKnownTokensInReview = new RegExp(
-  `(?<![A-Za-z0-9_./~-])(?:${wellKnownTokens.source.replaceAll("\\b", "")})${valueEnd}`,
+  `(?<![A-Za-z0-9_./~-])(?:${wellKnownTokens.source
+    .replaceAll("\\b", "")
+    .replaceAll(/\{(\d+),\}/g, "{$1,1024}")})${valueEnd}`,
   "g",
 );
 
