@@ -65,6 +65,10 @@ describe("importSdk", () => {
     await expect(load({ resolveInstalled: () => current.entry })).resolves.toEqual({
       installed: true,
     });
+    // A runtime that resolves to a plain path instead of a file URL.
+    await expect(
+      load({ resolveInstalled: () => join(current.directory, "dist", "index.js") }),
+    ).resolves.toEqual({ installed: true });
   });
 
   it("refuses an installed copy whose version cannot be found", async () => {

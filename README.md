@@ -201,7 +201,8 @@ reviewer does, including the decision backend's `onOversize: "agent"` fallback.
     Codex config (`$CODEX_HOME/config.toml`, `~/.codex/config.toml` by default) and any
     system-managed config still load, MCP servers included. With
     `reviewer.agent.codexSdk.path` or an installed copy, the SDK must be 0.163.0 or newer (a
-    prerelease of 0.163.0 is refused).
+    prerelease of 0.163.0 is refused). The CommonJS build cannot locate an installed copy's
+    version, so it needs `reviewer.agent.codexSdk.path`.
 - Both can read files outside the project: Claude Code when its auto-mode classifier judges the
   read safe (measured on 2026-10-17, it read `/etc/hostname` and searched `/home` when asked to),
   Codex because its read-only sandbox can read the whole disk. What it reads reaches the model

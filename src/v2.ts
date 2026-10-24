@@ -306,8 +306,8 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       await context.tool.hook("execute.before", async (event) => {
         // A skipped call runs without a review, so the agent name is not enough: a
         // session the host started under that agent (a task, say) is reviewed
-        // like any other. A winding-down reviewer session's late read is
-        // reviewed once at worst.
+        // like any other. Each late read of a winding-down reviewer session
+        // costs one review.
         if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
 
         const key = grantKey(event);

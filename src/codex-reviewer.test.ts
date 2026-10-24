@@ -1,8 +1,8 @@
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, parse } from "node:path";
 
 import type { CodexOptions, ThreadOptions, TurnOptions } from "@openai/codex-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 
 import { CodexReviewer, type CreateCodex, loadCodex } from "./codex-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
@@ -76,11 +76,14 @@ describe("CodexReviewer", () => {
     // A real, symlink-free directory, so the expected overrides do not depend
     // on what exists on the machine running the test.
     const project = testDirectory();
+    onTestFinished(() => rmSync(project, { recursive: true, force: true }));
     const ancestors: string[] = [];
     for (let current = project; ; current = dirname(current)) {
       ancestors.push(current);
       if (dirname(current) === current) break;
     }
+    expect(ancestors[0]).toBe(project);
+    expect(ancestors.at(-1)).toBe(parse(project).root);
     const reviewer = new CodexReviewer({
       configuration: configuration({ model: "gpt-5.6-codex" }),
       directory: project,

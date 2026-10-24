@@ -106,8 +106,9 @@ function parseVersion(
 
 /**
  * Whether `version` is at least `minimum` by semver precedence on
- * `major.minor.patch`, a prerelease ranking below its release; a missing or
- * unreadable version is not.
+ * `major.minor.patch`, a prerelease ranking below its release (prerelease
+ * identifiers themselves are not compared); a missing or unreadable version
+ * is not.
  */
 export function atLeast(version: string | undefined, minimum: string): boolean {
   const have = parseVersion(version);
@@ -126,7 +127,9 @@ async function installedVersion(input: {
   resolve: (() => string) | undefined;
 }): Promise<string | undefined> {
   if (input.resolve === undefined) return undefined;
-  let directory = dirname(fileURLToPath(input.resolve()));
+  // Node returns a file URL; accept a plain path as well.
+  const resolved = input.resolve();
+  let directory = dirname(resolved.startsWith("file:") ? fileURLToPath(resolved) : resolved);
   for (;;) {
     try {
       const manifest = z.safeParse(
