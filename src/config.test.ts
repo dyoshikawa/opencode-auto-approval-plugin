@@ -95,6 +95,14 @@ describe("parsePluginConfiguration", () => {
     expect(() => parsePluginConfiguration({ options: { allToolsNativeAsks: "invalid" } })).toThrow(
       "Invalid auto-approval plugin options",
     );
+    for (const mode of [undefined, "on-ask"]) {
+      expect(() =>
+        parsePluginConfiguration({ options: { mode, allToolsNativeAsks: "review" } }),
+      ).toThrow('allToolsNativeAsks "review" needs mode "all-tools".');
+    }
+    expect(
+      parsePluginConfiguration({ options: { allToolsNativeAsks: "preserve" } }).allToolsNativeAsks,
+    ).toBe("preserve");
   });
 
   it("only enables reviewer cleanup on explicit V2 OpenCode opt-in", () => {

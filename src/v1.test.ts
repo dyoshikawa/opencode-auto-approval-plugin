@@ -34,6 +34,14 @@ function createPlugin(input: { verdict: ReviewerVerdict }) {
 }
 
 describe("V1 plugin (opencode 1.x)", () => {
+  it("rejects the V2-only native ask bridge instead of ignoring it", async () => {
+    const { context } = createContext();
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await expect(
+      plugin(context as never, { mode: "all-tools", allToolsNativeAsks: "review" }),
+    ).rejects.toThrow('allToolsNativeAsks "review" needs OpenCode 2.x.');
+  });
+
   it("reads bounded history for continue and excludes assistant text by default", async () => {
     const { context, messages } = createContext();
     messages.mockResolvedValue({

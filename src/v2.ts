@@ -42,6 +42,15 @@ function inputDigest(input: unknown): string {
     .digest("hex");
 }
 
+/** Whether the live call still is the one that was reviewed. */
+function unchanged(grant: {
+  tool: string;
+  inputDigest: string;
+  call: { tool: string; input: unknown };
+}): boolean {
+  return grant.call.tool === grant.tool && inputDigest(grant.call.input) === grant.inputDigest;
+}
+
 /** V2 model references use `id`; the plugin configuration keeps V1's `modelID`. */
 function toModelRef(model: ModelReference): { providerID: string; id: string } {
   return { providerID: model.providerID, id: model.modelID };
@@ -203,6 +212,8 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
           agent: string;
           tool: string;
           inputDigest: string;
+          /** The live `execute.before` event, which later hooks may still mutate. */
+          call: { tool: string; input: unknown };
           intent: Awaited<ReturnType<typeof tracker.begin>>;
           expiresAt: number;
         }
@@ -219,7 +230,10 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
           });
           const grant = nativeGrants.get(key);
           if (!grant || grant.agent !== event.agent) return;
-          if (Date.now() >= grant.expiresAt || grant.intent.changed()) {
+          // A later execute.before hook (another plugin, or core's input
+          // repair) may have rewritten the call after it was reviewed; the
+          // native ask then stays with a human before the tool runs.
+          if (Date.now() >= grant.expiresAt || grant.intent.changed() || !unchanged(grant)) {
             nativeGrants.delete(key);
             return;
           }
@@ -227,6 +241,9 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
           if (event.action === grant.tool) {
             // The reviewer examined this tool's input. An unrelated permission
             // action cannot inherit this grant, even with the same call ID.
+            // The ask's resources are not compared with that input: a tool
+            // that resolves its own resources at run time is trusted to
+            // derive them from the reviewed input (see README).
             event.effect = "allow";
             event.message = "Approved by auto-review for this tool invocation.";
             return;
@@ -265,9 +282,13 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
           const key = grantKey(event);
           const grant = nativeGrants.get(key);
           nativeGrants.delete(key);
-          // Other execute.before hooks may run after ours and change input.
-          // This detects such mutations but cannot undo an already run tool.
-          if (grant && grant.inputDigest !== inputDigest(event.input)) {
+          // The evaluate hook already refuses a grant whose call changed;
+          // this catches a change made after the last native ask, which
+          // cannot undo an already run tool.
+          if (
+            grant &&
+            (grant.tool !== event.tool || grant.inputDigest !== inputDigest(event.input))
+          ) {
             throw new Error("Tool input changed after auto-review approval.");
           }
         });
@@ -281,6 +302,8 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         for (const [pending, grant] of nativeGrants) {
           if (Date.now() >= grant.expiresAt) nativeGrants.delete(pending);
         }
+        // Taken before the review so a change made while it runs is caught.
+        const reviewed = { tool: event.tool, inputDigest: inputDigest(event.input) };
         const intent = await tracker.begin(event.sessionID);
         await reviewToolCallOrThrow({
           reviewer,
@@ -299,8 +322,8 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         if (configuration.allToolsNativeAsks === "review") {
           nativeGrants.set(key, {
             agent: event.agent,
-            tool: event.tool,
-            inputDigest: inputDigest(event.input),
+            ...reviewed,
+            call: event,
             intent,
             expiresAt: Date.now() + grantLifetimeMs,
           });

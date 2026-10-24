@@ -353,8 +353,14 @@ function modeConfiguration(input: {
   mode?: PluginConfiguration["mode"];
   allToolsNativeAsks?: PluginConfiguration["allToolsNativeAsks"];
 }): Pick<PluginConfiguration, "mode" | "allToolsNativeAsks"> {
+  const mode = input.mode ?? "on-ask";
+  if (input.allToolsNativeAsks === "review" && mode !== "all-tools") {
+    throw new Error(
+      'Invalid auto-approval plugin options: allToolsNativeAsks "review" needs mode "all-tools".',
+    );
+  }
   return {
-    mode: input.mode ?? "on-ask",
+    mode,
     allToolsNativeAsks: input.allToolsNativeAsks ?? "preserve",
   };
 }
