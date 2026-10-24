@@ -95,8 +95,9 @@ const metadataContentKeys = new Set([
 ]);
 /** Built-in patch tools, matched through the file paths their headers name. */
 const patchTools = new Set(["apply_patch", "patch"]);
-// OpenCode trims a header line before reading it, so any leading whitespace is allowed.
-const patchPath = /^\s*\*\*\* (?:add file|update file|delete file|move to): (.+)$/gim;
+// OpenCode trims a header line before reading it, so leading whitespace is allowed;
+// never a line break, which would make the scan quadratic over blank lines.
+const patchPath = /^[^\S\r\n]*\*\*\* (?:add file|update file|delete file|move to): (.+)$/gim;
 /** Words: a path or flag stays one candidate whatever quotes or operators wrap it. */
 const separators = /[\s"'`;|&<>(){}=]+/;
 

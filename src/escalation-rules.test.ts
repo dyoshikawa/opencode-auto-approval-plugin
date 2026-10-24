@@ -349,6 +349,12 @@ describe("EscalationRulesReviewer", () => {
       "escalate",
     );
     const nbsp = "*** Begin Patch\n\u00a0*** Update File: .env\n@@\n*** End Patch";
+    const blankLines = `*** Begin Patch${"\n".repeat(100_000)}*** End Patch`;
+    const started = performance.now();
+    expect((await reviewer.review(toolCall("patch", { patchText: blankLines }))).verdict).toBe(
+      "allow",
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
     expect((await reviewer.review(toolCall("patch", { patchText: nbsp }))).verdict).toBe(
       "escalate",
     );
