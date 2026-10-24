@@ -42,6 +42,17 @@ describe("V1 plugin (opencode 1.x)", () => {
     ).rejects.toThrow('allToolsNativeAsks "review" needs OpenCode 2.x.');
   });
 
+  it("rejects reviewer session cleanup, which V1 cannot do", async () => {
+    const { context } = createContext();
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await expect(
+      plugin(context as never, { reviewer: { agent: { cleanupSessions: true } } }),
+    ).rejects.toThrow("reviewer.agent.cleanupSessions needs OpenCode 2.x.");
+    await expect(
+      plugin(context as never, { reviewer: { agent: { cleanupSessions: false } } }),
+    ).resolves.toBeDefined();
+  });
+
   it("reads bounded history for continue and excludes assistant text by default", async () => {
     const { context, messages } = createContext();
     messages.mockResolvedValue({

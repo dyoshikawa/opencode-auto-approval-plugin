@@ -545,7 +545,9 @@ function agentConfiguration(reviewer: ReviewerOptions | undefined): AgentConfigu
   }
   if (runtime !== "opencode") {
     if (agent.cleanupSessions !== undefined) {
-      throw new Error('reviewer.agent.cleanupSessions requires reviewer.agent.runtime "opencode".');
+      throw new Error(
+        'Invalid auto-approval plugin options: reviewer.agent.cleanupSessions needs reviewer.agent.runtime "opencode".',
+      );
     }
     return sdkAgentConfiguration({
       runtime,

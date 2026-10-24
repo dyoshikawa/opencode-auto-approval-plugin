@@ -231,6 +231,44 @@ describe("AgentReviewer", () => {
     expect(client.aborted).toEqual(["review-session"]);
   });
 
+  it("removes the reviewer session after the verdict only when opted in", async () => {
+    for (const cleanupSessions of [true, false]) {
+      const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
+      const reviewer = new AgentReviewer({
+        client,
+        configuration: parsePluginConfiguration({
+          options: { reviewer: { agent: { cleanupSessions } } },
+        }),
+      });
+      await reviewer.review({
+        source: "tool-call",
+        sessionID: "main",
+        action: "read",
+        resource: {},
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(client.removed).toEqual(cleanupSessions ? ["review-session"] : []);
+    }
+  });
+
+  it("aborts and removes a timed-out reviewer session when opted in", async () => {
+    const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
+    client.prompt = async () => new Promise<never>(() => undefined);
+    const reviewer = new AgentReviewer({
+      client,
+      configuration: parsePluginConfiguration({
+        options: { reviewer: { timeoutMs: 1, agent: { cleanupSessions: true } } },
+      }),
+    });
+    await expect(
+      reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} }),
+    ).rejects.toThrow("Reviewer timed out.");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(client.aborted).toEqual(["review-session"]);
+    expect(client.removed).toEqual(["review-session"]);
+    expect(reviewer.isReviewerSession({ sessionID: "review-session" })).toBe(false);
+  });
+
   it("does not wait for an opt-in removal that never resolves", async () => {
     const client = clientWithResponse({ response: '{"verdict":"allow","reason":"ok"}' });
     client.remove = async () => new Promise<never>(() => undefined);
