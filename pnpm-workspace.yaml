@@ -11,6 +11,7 @@ ignoreScripts: false
 # Refuse dependency versions published less than a day ago, so a compromised
 # release has time to be pulled before it lands in a lockfile.
 minimumReleaseAge: 1440 # 1 day
+# cspell:ignore mrhx
 # Development-only fixes for advisories in versions that @opencode-ai/plugin
 # 1.19.x pins exactly: toml <=5.0.0 through effect (GHSA-4qx8-w7c3-pj3p,
 # GHSA-9j65-hcg3-gc64, GHSA-9qmh-m7c6-f92p) and zod <4.6.6
