@@ -92,11 +92,30 @@ export function redactForReview(input: {
       /((?:https?|ftp|ssh):\/\/[A-Za-z0-9._~%+-]{1,256}):[A-Za-z0-9._~%+-]{1,256}@/gi,
       "$1:[REDACTED]@",
     )
-    .replace(wellKnownTokens, "[REDACTED_TOKEN]");
+    .replace(wellKnownTokensInReview, "[REDACTED_TOKEN]");
+}
+
+/**
+ * The token formats, but only as a whole word: never inside a path or file
+ * name (`./sk-…`), where replacing it would hide what runs.
+ */
+const wellKnownTokensInReview = new RegExp(
+  `(?<![A-Za-z0-9_./~-])(?:${wellKnownTokens.source.replaceAll("\\b", "")})${valueEnd}`,
+  "g",
+);
+
+/** How often each identifier occurs in `text`, counted in one pass. */
+function identifierCounts(text: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const [word] of text.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+    counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** Secret-shaped values after a header, a flag or a variable that names them as credentials. */
 function redactInContext(text: string): string {
+  let counts: Map<string, number> | undefined;
   return text
     .replace(
       new RegExp(
@@ -115,8 +134,9 @@ function redactInContext(text: string): string {
     .replace(
       new RegExp(`\\b([A-Za-z_][A-Za-z0-9_]{0,63})=(["']?)${secretValue}\\2${valueEnd}`, "g"),
       (match, name: string, quote: string) =>
-        // A value the same text expands (`$NAME`) may decide what runs.
-        secretName.test(name) && !text.includes(`$${name}`) && !text.includes(`\${${name}`)
+        // A variable the same text names again (`$NAME`, `printenv NAME`)
+        // may decide what runs, so its value stays visible.
+        secretName.test(name) && (counts ??= identifierCounts(text)).get(name) === 1
           ? `${name}=${quote}[REDACTED]${quote}`
           : match,
     );
