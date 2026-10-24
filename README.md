@@ -628,14 +628,17 @@ with the matched rule as the reason. Rules are off by default.
   configuration serves both. One permission action can cover several tools (`edit` covers `write`,
   `apply_patch` and friends), so write path rules with `"action": "*"` when they must hold in both
   modes.
-- `resource` is matched against every string **value** in the operation — as a whole, line by line
-  and word by word: a permission request's resources or patterns (not its metadata, which holds
-  diffs), or every string in the tool input, nested values included. File contents and patch text
-  are matched too, which is how `*.env` catches `cat .env | head` and the `*** Update File:` line of
-  an `apply_patch`, so keep content-like patterns to the shell action.
-  Object keys, numbers and booleans are not matched. A rule without `resource` matches every
-  operation of its action. An operation more than 16 levels deep or with more than 10,000 strings
-  escalates under any rule for its action.
+- `resource` is matched against string **values**: a permission request's resources or patterns
+  (not its metadata, which holds diffs), each as a whole and word by word; in a tool input, a
+  `command` as a whole, line by line and word by word (quotes and shell operators separate words,
+  so `*.env` catches `cat ".env"`, `cat .env | head` and `$(cat .env)`), a patch (`patchText`)
+  through the file paths its `*** Update File:` / `Add File:` / `Delete File:` / `Move to:` headers
+  name, and every other string as a whole, nested values included. File contents (`content`,
+  `oldString`, `newString`, `text`) are not matched, so a path rule does not fire on code that
+  mentions `process.env`. Object keys, numbers and booleans are not matched. A rule without
+  `resource` matches every operation of its action. An operation more than 16 levels deep, with
+  more than 10,000 strings or more than a million characters to match escalates under any rule for
+  its action.
 - Patterns use OpenCode's wildcards: `*` matches anything (including nothing), `?` one character,
   and the whole string must match, so `git push *` matches `git push` and `git push origin` but not
   `cd repo && git push` as a whole `all-tools` command; write `*git push*` to catch it anywhere.

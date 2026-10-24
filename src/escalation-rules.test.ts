@@ -227,6 +227,65 @@ describe("EscalationRulesReviewer", () => {
     expect(await verdict(toolCall("shell", { command: "cat .env-sample" }))).toBe("allow");
   });
 
+  it.each([
+    'cat ".env"',
+    "cat '.env' && true",
+    "cat .env;ls",
+    "echo $(cat .env)",
+    "cat<.env",
+    "source .env\\\n  && run",
+  ])("catches a quoted or joined path in a command: %s", async (command) => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "*", resource: "*.env" }],
+    });
+    expect((await reviewer.review(toolCall("shell", { command }))).verdict).toBe("escalate");
+  });
+
+  it("does not match a path rule against file contents", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [
+        { action: "*", resource: "*.env" },
+        { action: "*", resource: "*.env.*" },
+      ],
+    });
+    const verdict = async (request: ReviewRequest) => (await reviewer.review(request)).verdict;
+    const code = "const url = process.env.URL;\nconst env = import.meta.env";
+    expect(await verdict(toolCall("write", { filePath: "/a.ts", content: code }))).toBe("allow");
+    expect(
+      await verdict(toolCall("edit", { filePath: "/a.ts", oldString: code, newString: code })),
+    ).toBe("allow");
+    expect(
+      await verdict(
+        toolCall("apply_patch", {
+          patchText: `*** Begin Patch\n*** Update File: src/a.ts\n@@\n+${code}\n*** End Patch`,
+        }),
+      ),
+    ).toBe("allow");
+    expect(await verdict(toolCall("write", { filePath: "/w/.env", content: "A=1" }))).toBe(
+      "escalate",
+    );
+  });
+
+  it("checks a large write quickly and escalates one too large to check", async () => {
+    const rules = Array.from({ length: 200 }, (_, index) => ({
+      action: "*",
+      resource: `*secret-${index}*`,
+    }));
+    const reviewer = new EscalationRulesReviewer({ reviewer: permissiveReviewer(), rules });
+    const content = "const value = process.env.X;\n".repeat(40_000);
+    const started = performance.now();
+    expect((await reviewer.review(toolCall("write", { filePath: "/a.ts", content }))).verdict).toBe(
+      "allow",
+    );
+    expect(performance.now() - started).toBeLessThan(1_000);
+    const command = Array.from({ length: 200_000 }, (_, index) => `w${index}`).join(" ");
+    expect((await reviewer.review(toolCall("shell", { command }))).reason).toContain(
+      "too large to check",
+    );
+  });
+
   it("names the rule as configured in the reason", async () => {
     const reviewer = new EscalationRulesReviewer({
       reviewer: permissiveReviewer(),

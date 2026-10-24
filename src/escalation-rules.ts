@@ -1,3 +1,4 @@
+// cspell:words oldstring newstring patchtext
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import { sanitizeReason } from "./reviewer.js";
 import { isRecord } from "./shared.js";
@@ -13,12 +14,17 @@ export type EscalationRule = {
   resource?: string;
 };
 
-/** Beyond this many strings an operation escalates rather than go unchecked. */
+/** Beyond these an operation escalates rather than go unchecked. */
 const maxStrings = 10_000;
 const maxDepth = 16;
+const maxCandidateCharacters = 1_000_000;
 
 /** A rule as matched, next to the rule as configured for the reason. */
-type NormalizedRule = { rule: EscalationRule; action: string; resource?: string };
+type NormalizedRule = {
+  rule: EscalationRule;
+  action: (value: string) => boolean;
+  resource?: (value: string) => boolean;
+};
 
 export class EscalationRulesReviewer implements Reviewer {
   readonly #reviewer: Reviewer;
@@ -29,8 +35,10 @@ export class EscalationRulesReviewer implements Reviewer {
     // Patterns get the same folding as the strings they match.
     this.#rules = input.rules.map((rule) => ({
       rule,
-      action: rule.action.toLowerCase(),
-      ...(rule.resource === undefined ? {} : { resource: normalized(rule.resource) }),
+      action: wildcardMatcher(rule.action.toLowerCase()),
+      ...(rule.resource === undefined
+        ? {}
+        : { resource: wildcardMatcher(normalized(rule.resource)) }),
     }));
   }
 
@@ -55,50 +63,76 @@ function matchingRule(input: {
   request: ReviewRequest;
 }): EscalationRule | "unchecked" | undefined {
   const action = input.request.action.toLowerCase();
-  let strings: string[] | undefined;
-  let candidates: string[] | undefined;
+  let candidates: string[] | "unchecked" | undefined;
   for (const rule of input.rules) {
-    if (!matchesWildcard({ value: action, pattern: rule.action })) continue;
+    if (!rule.action(action)) continue;
     const { resource } = rule;
     if (resource === undefined) return rule.rule;
-    strings ??= stringsOf(checkedPart(input.request));
-    if (strings === undefined) return "unchecked";
-    candidates ??= strings.flatMap(candidatesOf);
-    if (candidates.some((value) => matchesWildcard({ value, pattern: resource }))) {
-      return rule.rule;
-    }
+    candidates ??= candidatesOf(input.request);
+    if (candidates === "unchecked") return candidates;
+    if (candidates.some(resource)) return rule.rule;
   }
   return undefined;
 }
 
-/**
- * A string as a whole, each of its lines and each of its words, normalized.
- * A path inside a patch (`*** Update File: config/.env`) or a command line
- * (`cat .env | head`) then still meets a pattern anchored at its end.
- */
-function candidatesOf(value: string): string[] {
-  const whole = normalized(value);
-  const lines = value.includes("\n")
-    ? value
-        .split(/\r?\n/)
-        .map(normalized)
-        .filter((line) => line !== "")
-    : [];
-  const words = whole.includes(" ") ? whole.split(" ") : [];
-  return [whole, ...lines, ...words];
-}
+/** Keys whose string is file content: what is written, not where or how. */
+const contentKeys = new Set(["content", "oldstring", "newstring", "text"]);
+/** Keys whose string is a patch: matched through the paths it names. */
+const patchKeys = new Set(["patchtext", "patch"]);
+const patchPath = /^\*\*\* (?:add file|update file|delete file|move to): (.+)$/gim;
+/** Shell words: a path or flag stays one candidate whatever quotes or operators wrap it. */
+const shellSeparators = /[\s"'`;|&<>(){}=]+/;
 
 /**
- * What a rule's resource is matched against: a permission request's
- * resources or patterns (its metadata holds diffs and other derived text),
- * or the whole tool input.
+ * What a rule's resource is matched against, normalized and de-duplicated:
+ *
+ * - a permission request's resources or patterns (not its metadata, which
+ *   holds diffs), each as a whole and word by word;
+ * - in a tool input, a `command` as a whole, line by line and word by word,
+ *   a patch through the file paths its headers name, and every other string
+ *   as a whole. File contents (`content`, `oldString`, `newString`) are not
+ *   matched: a path rule must not fire on code that mentions `process.env`.
+ *
+ * `"unchecked"` when the operation is too large or deep to walk.
  */
-function checkedPart(request: ReviewRequest): unknown {
-  if (request.source !== "permission-request" || !isRecord(request.resource)) {
-    return request.resource;
-  }
-  const { metadata: _metadata, ...rest } = request.resource;
-  return rest;
+function candidatesOf(request: ReviewRequest): string[] | "unchecked" {
+  const permission = request.source === "permission-request";
+  const candidates = new Set<string>();
+  let strings = 0;
+  let characters = 0;
+  const add = (value: string) => {
+    const folded = normalized(value);
+    if (folded === "" || candidates.has(folded)) return;
+    candidates.add(folded);
+    characters += folded.length;
+  };
+  const addWords = (value: string) => {
+    add(value);
+    for (const line of value.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
+      add(line);
+      for (const word of line.split(shellSeparators)) add(word);
+    }
+  };
+  const visit = (value: unknown, key: string, depth: number): boolean => {
+    if (typeof value === "string") {
+      strings++;
+      if (permission || key === "command") addWords(value);
+      else if (patchKeys.has(key)) {
+        for (const match of value.matchAll(patchPath)) add(match[1] ?? "");
+      } else if (!contentKeys.has(key)) add(value);
+      return strings <= maxStrings && characters <= maxCandidateCharacters;
+    }
+    if (!isRecord(value)) return true;
+    if (depth >= maxDepth) return false;
+    return Object.entries(value).every(([child, item]) =>
+      visit(item, Array.isArray(value) ? key : child.toLowerCase(), depth + 1),
+    );
+  };
+  const resource =
+    permission && isRecord(request.resource)
+      ? Object.fromEntries(Object.entries(request.resource).filter(([name]) => name !== "metadata"))
+      : request.resource;
+  return visit(resource, "", 0) ? [...candidates] : "unchecked";
 }
 
 /**
@@ -115,24 +149,6 @@ function normalized(value: string): string {
 }
 
 /**
- * Every string value in the operation. `undefined` when the operation is
- * too large or deep to walk.
- */
-function stringsOf(input: unknown): string[] | undefined {
-  const strings: string[] = [];
-  const visit = (value: unknown, depth: number): boolean => {
-    if (typeof value === "string") {
-      strings.push(value);
-      return strings.length <= maxStrings;
-    }
-    if (!isRecord(value)) return true;
-    if (depth >= maxDepth) return false;
-    return Object.values(value).every((child) => visit(child, depth + 1));
-  };
-  return visit(input, 0) ? strings : undefined;
-}
-
-/**
  * OpenCode's wildcard syntax: `*` matches anything, `?` one character, the
  * whole value must match, and a trailing ` *` also matches the bare command
  * (`git push *` matches `git push`). Matched segment by segment, never
@@ -140,30 +156,40 @@ function stringsOf(input: unknown): string[] | undefined {
  * the cost is bounded by the value's length times the pattern's.
  */
 export function matchesWildcard(input: { value: string; pattern: string }): boolean {
-  if (input.pattern.endsWith(" *") && matchesGlob(input.value, input.pattern.slice(0, -2))) {
-    return true;
-  }
-  return matchesGlob(input.value, input.pattern);
+  return wildcardMatcher(input.pattern)(input.value);
 }
 
-function matchesGlob(value: string, pattern: string): boolean {
+/** `matchesWildcard` with the pattern split once. */
+function wildcardMatcher(pattern: string): (value: string) => boolean {
+  const full = globMatcher(pattern);
+  if (!pattern.endsWith(" *")) return full;
+  const bare = globMatcher(pattern.slice(0, -2));
+  return (value) => bare(value) || full(value);
+}
+
+function globMatcher(pattern: string): (value: string) => boolean {
   const segments = pattern.split("*");
   const first = segments[0] ?? "";
-  if (segments.length === 1) return value.length === first.length && segmentAt(value, first, 0);
+  if (segments.length === 1) {
+    return (value) => value.length === first.length && segmentAt(value, first, 0);
+  }
   const last = segments.at(-1) ?? "";
-  if (value.length < first.length + last.length) return false;
-  if (!segmentAt(value, first, 0) || !segmentAt(value, last, value.length - last.length)) {
-    return false;
-  }
-  // Leftmost placement of each middle segment is always safe for `*`.
-  let position = first.length;
-  const end = value.length - last.length;
-  for (const segment of segments.slice(1, -1)) {
-    const found = findSegment({ value, segment, from: position, end });
-    if (found === -1) return false;
-    position = found + segment.length;
-  }
-  return true;
+  const middle = segments.slice(1, -1);
+  return (value) => {
+    if (value.length < first.length + last.length) return false;
+    if (!segmentAt(value, first, 0) || !segmentAt(value, last, value.length - last.length)) {
+      return false;
+    }
+    // Leftmost placement of each middle segment is always safe for `*`.
+    let position = first.length;
+    const end = value.length - last.length;
+    for (const segment of middle) {
+      const found = findSegment({ value, segment, from: position, end });
+      if (found === -1) return false;
+      position = found + segment.length;
+    }
+    return true;
+  };
 }
 
 /** Whether `segment` (`?` = any one character) matches `value` at `index`. */
