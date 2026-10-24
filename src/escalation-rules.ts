@@ -17,14 +17,18 @@ export type EscalationRule = {
 const maxStrings = 10_000;
 const maxDepth = 16;
 
+/** A rule as matched, next to the rule as configured for the reason. */
+type NormalizedRule = { rule: EscalationRule; action: string; resource?: string };
+
 export class EscalationRulesReviewer implements Reviewer {
   readonly #reviewer: Reviewer;
-  readonly #rules: EscalationRule[];
+  readonly #rules: NormalizedRule[];
 
   constructor(input: { reviewer: Reviewer; rules: EscalationRule[] }) {
     this.#reviewer = input.reviewer;
-    // Patterns get the same whitespace folding as the strings they match.
+    // Patterns get the same folding as the strings they match.
     this.#rules = input.rules.map((rule) => ({
+      rule,
       action: rule.action.toLowerCase(),
       ...(rule.resource === undefined ? {} : { resource: normalized(rule.resource) }),
     }));
@@ -47,20 +51,41 @@ export class EscalationRulesReviewer implements Reviewer {
 
 /** The first rule, in configuration order, that matches the operation. */
 function matchingRule(input: {
-  rules: EscalationRule[];
+  rules: NormalizedRule[];
   request: ReviewRequest;
 }): EscalationRule | "unchecked" | undefined {
   const action = input.request.action.toLowerCase();
   let strings: string[] | undefined;
+  let candidates: string[] | undefined;
   for (const rule of input.rules) {
     if (!matchesWildcard({ value: action, pattern: rule.action })) continue;
     const { resource } = rule;
-    if (resource === undefined) return rule;
+    if (resource === undefined) return rule.rule;
     strings ??= stringsOf(checkedPart(input.request));
     if (strings === undefined) return "unchecked";
-    if (strings.some((value) => matchesWildcard({ value, pattern: resource }))) return rule;
+    candidates ??= strings.flatMap(candidatesOf);
+    if (candidates.some((value) => matchesWildcard({ value, pattern: resource }))) {
+      return rule.rule;
+    }
   }
   return undefined;
+}
+
+/**
+ * A string as a whole, each of its lines and each of its words, normalized.
+ * A path inside a patch (`*** Update File: config/.env`) or a command line
+ * (`cat .env | head`) then still meets a pattern anchored at its end.
+ */
+function candidatesOf(value: string): string[] {
+  const whole = normalized(value);
+  const lines = value.includes("\n")
+    ? value
+        .split(/\r?\n/)
+        .map(normalized)
+        .filter((line) => line !== "")
+    : [];
+  const words = whole.includes(" ") ? whole.split(" ") : [];
+  return [whole, ...lines, ...words];
 }
 
 /**
@@ -90,14 +115,14 @@ function normalized(value: string): string {
 }
 
 /**
- * Every string value in the operation, normalized like the patterns.
- * `undefined` when the operation is too large or deep to walk.
+ * Every string value in the operation. `undefined` when the operation is
+ * too large or deep to walk.
  */
 function stringsOf(input: unknown): string[] | undefined {
   const strings: string[] = [];
   const visit = (value: unknown, depth: number): boolean => {
     if (typeof value === "string") {
-      strings.push(normalized(value));
+      strings.push(value);
       return strings.length <= maxStrings;
     }
     if (!isRecord(value)) return true;

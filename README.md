@@ -628,9 +628,11 @@ with the matched rule as the reason. Rules are off by default.
   configuration serves both. One permission action can cover several tools (`edit` covers `write`,
   `apply_patch` and friends), so write path rules with `"action": "*"` when they must hold in both
   modes.
-- `resource` is matched against every string **value** in the operation: a permission request's
-  resources or patterns (not its metadata, which holds diffs), or every string in the tool input,
-  nested values included — file contents too, so keep content-like patterns to the shell action.
+- `resource` is matched against every string **value** in the operation — as a whole, line by line
+  and word by word: a permission request's resources or patterns (not its metadata, which holds
+  diffs), or every string in the tool input, nested values included. File contents and patch text
+  are matched too, which is how `*.env` catches `cat .env | head` and the `*** Update File:` line of
+  an `apply_patch`, so keep content-like patterns to the shell action.
   Object keys, numbers and booleans are not matched. A rule without `resource` matches every
   operation of its action. An operation more than 16 levels deep or with more than 10,000 strings
   escalates under any rule for its action.

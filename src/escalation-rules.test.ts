@@ -210,6 +210,32 @@ describe("EscalationRulesReviewer", () => {
     }
   });
 
+  it("matches each line and word, so a path inside a patch or a command line is caught", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "*", resource: "*.env" }],
+    });
+    const verdict = async (request: ReviewRequest) => (await reviewer.review(request)).verdict;
+    expect(
+      await verdict(
+        toolCall("apply_patch", {
+          patchText: "*** Begin Patch\n*** Update File: config/.env\n@@\n-A=1\n+A=2\n*** End Patch",
+        }),
+      ),
+    ).toBe("escalate");
+    expect(await verdict(toolCall("shell", { command: "cat .env | head" }))).toBe("escalate");
+    expect(await verdict(toolCall("shell", { command: "cat .env-sample" }))).toBe("allow");
+  });
+
+  it("names the rule as configured in the reason", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "Bash", resource: "*GIT push*" }],
+    });
+    const decision = await reviewer.review(toolCall("bash", { command: "git push" }));
+    expect(decision.reason).toContain('{"action":"Bash","resource":"*GIT push*"}');
+  });
+
   it("asks the wrapped reviewer which sessions are its own", () => {
     const reviewer = new EscalationRulesReviewer({ reviewer: permissiveReviewer(), rules: [] });
     expect(reviewer.isReviewerSession({ sessionID: "review" })).toBe(true);
