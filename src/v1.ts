@@ -6,7 +6,7 @@ import {
   reviewerAgentPrompt,
   reviewerAllowedTools,
 } from "./agent-reviewer.js";
-import type { ModelReference } from "./config.js";
+import type { ModelReference, PluginConfiguration } from "./config.js";
 import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
 import {
   conversationFromMessages,
@@ -123,9 +123,29 @@ export function reviewerAgentConfig(): Record<string, unknown> {
   };
 }
 
+/** Options V1 cannot honour would otherwise be silently ignored. */
+function rejectV2OnlyOptions(configuration: PluginConfiguration): void {
+  // The native ask bridge needs V2's permission.evaluate hook.
+  if (configuration.allToolsNativeAsks === "review") {
+    throw new Error(
+      'Invalid auto-approval plugin options: allToolsNativeAsks "review" needs OpenCode 2.x.',
+    );
+  }
+  // V1 reviewer sessions are never removed.
+  if (
+    configuration.reviewer.agent.runtime === "opencode" &&
+    configuration.reviewer.agent.cleanupSessions
+  ) {
+    throw new Error(
+      "Invalid auto-approval plugin options: reviewer.agent.cleanupSessions needs OpenCode 2.x.",
+    );
+  }
+}
+
 export function createV1Plugin(dependencies: PluginDependencies): Plugin {
   return async (context, options = {}) => {
     const configuration = parsePluginConfiguration({ options });
+    rejectV2OnlyOptions(configuration);
     const reviewer = dependencies.createReviewer({
       client: createV1SessionClient({
         client: context.client as unknown as SdkClient,

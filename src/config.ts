@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 
 import * as z from "zod/mini";
 
+import type { EscalationRule } from "./escalation-rules.js";
 import { estimateTokens } from "./reviewer.js";
 
 const reviewerModes = ["on-ask", "all-tools"] as const;
@@ -124,6 +125,8 @@ export type PluginConfiguration = {
   /** V2 all-tools: preserve native asks unless explicitly opted into AI review. */
   allToolsNativeAsks: "preserve" | "review";
   auditLog: { enabled: boolean; includeCommand: boolean; path?: string };
+  /** Operations escalated to a human before any reviewer sees them. */
+  escalate: EscalationRule[];
   conversation: { enabled: boolean; includeAssistant: boolean };
   reviewer: {
     backend: ReviewerBackend;
@@ -266,6 +269,11 @@ const decisionOptionsSchema = z.discriminatedUnion("provider", [
   }),
 ]);
 
+/** Whitespace alone would normalize to a pattern that matches nothing. */
+function hasText(value: string): boolean {
+  return value.trim() !== "";
+}
+
 const pluginConfigurationSchema = z.object({
   auditLog: z.optional(
     z.object({
@@ -281,6 +289,18 @@ const pluginConfigurationSchema = z.object({
     }),
   ),
   mode: z.optional(z.enum(reviewerModes)),
+  escalate: z.optional(
+    z
+      .array(
+        z.object({
+          action: z.string().check(z.minLength(1), z.maxLength(200), z.refine(hasText)),
+          resource: z.optional(
+            z.string().check(z.minLength(1), z.maxLength(1_000), z.refine(hasText)),
+          ),
+        }),
+      )
+      .check(z.maxLength(200)),
+  ),
   allToolsNativeAsks: z.optional(z.enum(["preserve", "review"] as const)),
   reviewer: z.optional(
     z.object({
@@ -331,6 +351,10 @@ export function parsePluginConfiguration(input: {
   const configuration: PluginConfiguration = {
     ...modeConfiguration(result.data),
     auditLog: auditConfiguration(result.data.auditLog),
+    escalate: (result.data.escalate ?? []).map(({ action, resource }) => ({
+      action,
+      ...(resource === undefined ? {} : { resource }),
+    })),
     conversation: conversationConfiguration(result.data.conversation),
     reviewer: {
       backend,
@@ -353,8 +377,14 @@ function modeConfiguration(input: {
   mode?: PluginConfiguration["mode"];
   allToolsNativeAsks?: PluginConfiguration["allToolsNativeAsks"];
 }): Pick<PluginConfiguration, "mode" | "allToolsNativeAsks"> {
+  const mode = input.mode ?? "on-ask";
+  if (input.allToolsNativeAsks === "review" && mode !== "all-tools") {
+    throw new Error(
+      'Invalid auto-approval plugin options: allToolsNativeAsks "review" needs mode "all-tools".',
+    );
+  }
   return {
-    mode: input.mode ?? "on-ask",
+    mode,
     allToolsNativeAsks: input.allToolsNativeAsks ?? "preserve",
   };
 }
@@ -539,7 +569,9 @@ function agentConfiguration(reviewer: ReviewerOptions | undefined): AgentConfigu
   }
   if (runtime !== "opencode") {
     if (agent.cleanupSessions !== undefined) {
-      throw new Error('reviewer.agent.cleanupSessions requires reviewer.agent.runtime "opencode".');
+      throw new Error(
+        'Invalid auto-approval plugin options: reviewer.agent.cleanupSessions needs reviewer.agent.runtime "opencode".',
+      );
     }
     return sdkAgentConfiguration({
       runtime,

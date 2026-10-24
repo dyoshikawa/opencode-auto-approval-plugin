@@ -169,6 +169,20 @@ export function parseVerdict(input: string, expectedCheck: string): ReviewVerdic
   ) {
     throw new Error("Reviewer response held conflicting verdicts.");
   }
+  // The search above only tries the last MAX_JSON_CANDIDATES opening and
+  // closing braces, so in a brace-heavy reply another verdict — before the
+  // answer or nested inside it — can escape it. Then the whole reply may
+  // name a verdict and carry the check only once, and hold no \u escape
+  // that could spell either. A brace-heavy reply that merely mentions a
+  // verdict in its reasoning is refused too, which leaves it to a human.
+  if (
+    tooManyBraces(input) &&
+    (occurrences(input.toLowerCase(), "verdict") !== 1 ||
+      occurrences(input, expectedCheck) !== 1 ||
+      input.includes("\\u"))
+  ) {
+    throw new Error("Reviewer response held too many braces to rule out conflicting verdicts.");
+  }
   if (!hasCheck(parsed.check, expectedCheck)) {
     throw new OversizeError(
       "The reviewer's answer lacked the review check from the start of its prompt, so it likely did not read the whole operation.",
@@ -191,7 +205,8 @@ type VerdictObject = {
   verdict: ReviewVerdict["verdict"];
   reason: string;
   check?: unknown;
-  /** Index of the object's closing brace in the reply. */
+  /** Indexes of the object's opening and closing braces in the reply. */
+  start: number;
   end: number;
 };
 
@@ -210,7 +225,13 @@ function verdictObjects(input: string): VerdictObject[] {
         continue;
       }
       if (isRecord(value) && isVerdict(value.verdict) && typeof value.reason === "string") {
-        found.push({ verdict: value.verdict, reason: value.reason, check: value.check, end });
+        found.push({
+          verdict: value.verdict,
+          reason: value.reason,
+          check: value.check,
+          start,
+          end,
+        });
       }
       break;
     }
@@ -220,6 +241,18 @@ function verdictObjects(input: string): VerdictObject[] {
 
 /** Bounds the search in a reply full of braces. */
 const MAX_JSON_CANDIDATES = 40;
+
+function occurrences(text: string, search: string): number {
+  return text.split(search).length - 1;
+}
+
+/** Whether `verdictObjects` leaves some opening or closing brace untried. */
+function tooManyBraces(input: string): boolean {
+  return (
+    (input.match(/\{/g)?.length ?? 0) > MAX_JSON_CANDIDATES ||
+    (input.match(/\}/g)?.length ?? 0) > MAX_JSON_CANDIDATES
+  );
+}
 
 function isVerdict(input: unknown): input is ReviewVerdict["verdict"] {
   return input === "allow" || input === "deny" || input === "escalate";
