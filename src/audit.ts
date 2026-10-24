@@ -1,9 +1,9 @@
-// cspell:words apikey pousr glpat
 import { constants } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type { PluginConfiguration } from "./config.js";
+import { redactSecrets } from "./redaction.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import { isRecord } from "./shared.js";
 
@@ -47,33 +47,7 @@ export function redactCommand(input: { command: string; apiKeys?: string[] }): {
   ) {
     return { command: "[OMITTED_OVERSIZED_COMMAND]", truncated: true };
   }
-  let text = input.command;
-  for (const apiKey of input.apiKeys ?? []) {
-    if (apiKey) text = text.split(apiKey).join("[REDACTED_KEY]");
-  }
-  text = text
-    .replace(
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
-      "[REDACTED_PRIVATE_KEY]",
-    )
-    .replace(
-      /((?:Authorization|Proxy-Authorization|X-API-Key|X-Auth-Token):?\s*(?:Bearer|Basic|Token|Key)?\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;'"\r\n]+)/gi,
-      "$1[REDACTED]",
-    )
-    .replace(/\b(Bearer|Basic|Token)\s+[^\s;'"\r\n]+/gi, "$1 [REDACTED]")
-    .replace(
-      /(--(?:password|token|api-key|secret|auth|apikey))[=\s]+(?:"[^"\r\n]*(?:"|$)|'[^'\r\n]*(?:'|$)|[^\s;&|]+)/gi,
-      "$1=[REDACTED]",
-    )
-    .replace(
-      /\b((?:[A-Za-z0-9_]*_)?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL)(?:_[A-Za-z0-9_]*)?)=(?:"[^"\r\n]*(?:"|$)|'[^'\r\n]*(?:'|$)|[^\s;&|]+)/gi,
-      "$1=[REDACTED]",
-    )
-    .replace(/((?:https?|ftp|ssh):\/\/)[^\s/@]+@/gi, "$1[REDACTED]@")
-    .replace(
-      /\b(?:gh[pousr]_[A-Za-z0-9_]{30,}|github_pat_[A-Za-z0-9_]{22,}|sk-[A-Za-z0-9_-]{20,}|typesafe_[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,})\b/gi,
-      "[REDACTED_TOKEN]",
-    );
+  const text = redactSecrets({ text: input.command, apiKeys: input.apiKeys });
   return {
     command: text.slice(0, MAX_COMMAND_LENGTH),
     truncated: text.length > MAX_COMMAND_LENGTH,

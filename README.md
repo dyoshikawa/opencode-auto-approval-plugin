@@ -474,6 +474,41 @@ alone, and the plugin needs an API key of its own.
 - The usage log records chat reviews with `provider: "chat"` and the token counts the endpoint
   reports; their cost is left unpriced, since it depends on the provider and model.
 
+### What reviewers receive
+
+Every backend reviews the same state: the request's `source` (`permission-request` or `tool-call`),
+the permission `action` or tool name, the `resource` (the permission request's patterns or
+resources and metadata, or the whole tool input — commands, file paths, file contents, patches),
+the latest user prompt as `userIntent`, and the [bounded conversation](#bounded-conversation-context-opt-in)
+when you enable it. The agent backend also sees whatever its read-only tools read from the
+workspace. That state goes to the reviewer's provider, so treat it as sent there.
+
+- **Credentials are redacted by default.** Before a review starts, every string in that state is
+  copied with common credentials replaced: the reviewer API keys in use, private key blocks,
+  authorization headers, `--password`/`--token`-style flags, `*_KEY=` / `*_TOKEN=` /
+  `*_SECRET=`-style assignments, URL user info and well-known token formats (GitHub, OpenAI,
+  GitLab, TypeSafe). The tool OpenCode runs is never changed. This is best effort: a secret in
+  another shape, or one the reviewer reads from a file, still reaches the provider. Add your own
+  regular expressions with `reviewer.redact.patterns`, or turn it off with
+  `reviewer.redact.enabled: false` when the reviewer must see the values.
+- **Size is bounded and fails closed.** An operation larger than `reviewer.agent.maxInputBytes`,
+  `reviewer.chat.maxInputBytes` or `reviewer.decision.maxStateTokens` is never sent in part; it
+  escalates to a human, or goes to the [fallback](#operations-too-large-for-the-decision-model)
+  you configured.
+- **Reviews in flight are capped.** At most `reviewer.maxConcurrentReviews` (default 4, 1–32)
+  reviews run at once; more wait for a free slot for up to `reviewer.timeoutMs` and then escalate.
+  Each review is also bounded by `reviewer.timeoutMs`. There is no spending cap: watch the cost
+  with [`stats`](#usage-and-cost-statistics) and your provider's own limits.
+
+```jsonc
+{
+  "reviewer": {
+    "maxConcurrentReviews": 2,
+    "redact": { "patterns": ["acct-[0-9]{8}"] },
+  },
+}
+```
+
 ### Usage and cost statistics
 
 Each decision, chat, Claude Agent SDK or Codex SDK review appends one line to a usage log at

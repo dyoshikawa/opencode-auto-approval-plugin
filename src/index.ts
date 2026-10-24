@@ -3,8 +3,10 @@ import { AuditingReviewer, createAuditLogger } from "./audit.js";
 import { ChatReviewer } from "./chat-reviewer.js";
 import { ClaudeAgentReviewer } from "./claude-agent-reviewer.js";
 import { CodexReviewer } from "./codex-reviewer.js";
+import { ConcurrencyLimitedReviewer } from "./concurrency-limit.js";
 import { DecisionReviewer } from "./decision-reviewer.js";
 import { OversizeFallbackReviewer } from "./fallback-reviewer.js";
+import { RedactingReviewer } from "./redaction.js";
 import type { Reviewer } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { fileUsageRecorder, projectID, usageLogPath } from "./usage.js";
@@ -13,7 +15,7 @@ import { createV2Plugin } from "./v2.js";
 
 const defaultDependencies: PluginDependencies = {
   createReviewer: (input) => {
-    const reviewer = backendReviewer(input);
+    const reviewer = boundedReviewer({ reviewer: backendReviewer(input), input });
     const audit = input.configuration.auditLog;
     if (!audit.enabled || !audit.path) return reviewer;
     return new AuditingReviewer({
@@ -23,6 +25,31 @@ const defaultDependencies: PluginDependencies = {
     });
   },
 };
+
+/**
+ * What every backend gets in front of it: a cap on reviews in flight and, by
+ * default, credentials replaced before the operation leaves the plugin.
+ */
+function boundedReviewer(input: {
+  reviewer: Reviewer;
+  input: Parameters<PluginDependencies["createReviewer"]>[0];
+}): Reviewer {
+  const { reviewer } = input.input.configuration;
+  const redacted = reviewer.redact.enabled
+    ? new RedactingReviewer({
+        reviewer: input.reviewer,
+        apiKeys: [reviewer.decision?.apiKey, reviewer.chat?.apiKey].filter(
+          (apiKey) => apiKey !== undefined,
+        ),
+        patterns: reviewer.redact.patterns.map((source) => new RegExp(source, "g")),
+      })
+    : input.reviewer;
+  return new ConcurrencyLimitedReviewer({
+    reviewer: redacted,
+    maxConcurrent: reviewer.maxConcurrentReviews,
+    waitMs: reviewer.timeoutMs,
+  });
+}
 
 function backendReviewer(input: Parameters<PluginDependencies["createReviewer"]>[0]): Reviewer {
   const { reviewer } = input.configuration;
