@@ -159,6 +159,20 @@ describe("parseVerdict", () => {
     expect(() => parseVerdict(reply, check)).toThrow("too many braces");
   });
 
+  it("refuses an escaped deny that names neither the verdict nor the check in plain text", () => {
+    // Only the \u rule can catch this one: "verdict" and the check each
+    // appear once in plain text, in the answer.
+    const escapedCheck = check.replace("-", "\\u002d");
+    const reply = [
+      // cspell:disable-next-line
+      `{"\\u0076erdict":"deny","reason":"no","check":"${escapedCheck}"}`,
+      "{}".repeat(40),
+      `{"verdict":"allow","reason":"ok","check":"${check}"}`,
+    ].join("\n");
+
+    expect(() => parseVerdict(reply, check)).toThrow("too many braces");
+  });
+
   it("reads an answer after many braces that hold no check", () => {
     const reply = `${"{}".repeat(60)}\n{"verdict":"allow","reason":"ok","check":"${check}"}`;
 
