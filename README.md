@@ -720,31 +720,52 @@ native asks with `allToolsNativeAsks: "review"`:
 ```
 
 The default is `"preserve"`; it is deliberately **not** enabled during upgrades.
-This option does not change V1 behavior. Reviewers still cannot bypass an
+`"review"` is rejected at startup with `mode: "on-ask"` and on OpenCode 1.x, where
+it would have no effect. Reviewers still cannot bypass an
 explicit native `deny`, and an AI `deny` or `escalate` always blocks the
 tool call. Native asks for the same reviewed tool call are scoped to its
 session, agent, message and invocation, automatically expire after 45 seconds,
 and are revoked when the user prompts the root session again.
 
+With the option on, the reviewer also answers the explicit `ask` rules you
+configured yourself (for example `"git push *": "ask"`) for reviewed calls; those
+no longer reach you once the call's review allows it.
+
 Only the native action matching the already reviewed tool is granted without
-another review. Extra actions, particularly `external_directory` with its
+another review. Its resources are **not** compared with the reviewed input: a
+custom or MCP tool that asks for its own action with resources it resolves at run
+time gets those resources allowed on the strength of the input review. Extra
+actions, particularly `external_directory` with its
 resolved path, receive a separate review that can approve or deny the actual
 resources. Failed or escalated extra reviews are denied without an interactive
 prompt. This may cost an additional model call.
 
-Other plugins and core hooks may mutate a tool's input after the reviewer's
-`execute.before` hook. The plugin detects such changes in `execute.after`
-when this option is enabled, but this detection occurs **after execution** and
-is not a hard security boundary. Use only with trusted plugins and hooks.
+Other plugins and core hooks may mutate a tool's name or input after the
+reviewer's `execute.before` hook. The plugin blocks a call that changed while it
+was being reviewed, and before granting a native ask it checks that the call still
+matches what was reviewed; a changed call leaves the ask to a human. These checks
+rely on later hooks changing the same event object that OpenCode then runs. A
+change made after the review and after the last native ask (or in a call that
+raises no native ask) is only detected in `execute.after`, **after execution**: the plugin then throws,
+but the plugin API does not define what OpenCode does with that error, and the
+tool has already run. This is not
+a hard security boundary. Use only with trusted plugins and hooks. Native asks
+granted this way are not written to the [audit log](#audit-log-opt-in).
+
+This option assumes OpenCode runs `tool.execute.before` before the tool's native
+permission check, as OpenCode 2.x core does. On a host that checks first, the
+grant does not exist yet and the native ask stays with a human.
 
 ### Review modes
 
-| Mode               | Reviewed operations                                           | `allow`                   | `deny`                               | `escalate` / reviewer failure                             |
-| ------------------ | ------------------------------------------------------------- | ------------------------- | ------------------------------------ | --------------------------------------------------------- |
-| `on-ask` (default) | Only operations that OpenCode already decided should ask      | Approves the request once | Leaves the OpenCode approval pending | Leaves the OpenCode approval pending                      |
-| `all-tools`        | Every intercepted tool call, including OpenCode-allowed calls | Runs the tool             | Blocks the tool                      | Blocks the tool and reports that human review is required |
+| Mode                                                 | Reviewed operations                                           | `allow`                                              | `deny`                               | `escalate` / reviewer failure                             |
+| ---------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------ | --------------------------------------------------------- |
+| `on-ask` (default)                                   | Only operations that OpenCode already decided should ask      | Approves the request once                            | Leaves the OpenCode approval pending | Leaves the OpenCode approval pending                      |
+| `all-tools`                                          | Every intercepted tool call, including OpenCode-allowed calls | Runs the tool                                        | Blocks the tool                      | Blocks the tool and reports that human review is required |
+| `all-tools` with `allToolsNativeAsks: "review"` (V2) | Every intercepted tool call, plus the native asks it raises   | Runs the tool and answers its same-action native ask | Blocks the tool                      | Blocks the tool; an extra native action is denied         |
 
-On OpenCode 2.x, `on-ask` runs inside the `permission.evaluate` hook: an `allow` verdict turns the
+On OpenCode 2.x, `on-ask` (and `all-tools` with `allToolsNativeAsks: "review"`, for the native asks
+of reviewed calls only) runs inside the `permission.evaluate` hook: an `allow` verdict turns the
 pending `ask` into `allow` before the permission prompt is shown, and the reviewer's reason is
 attached as the permission message. On OpenCode 1.x the plugin listens for the permission bus
 event and replies `once` through the SDK. In both cases anything other than `allow` leaves
