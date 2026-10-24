@@ -41,6 +41,28 @@ describe("parsePluginConfiguration", () => {
     expect(config.auditLog).toEqual({ enabled: true, path, includeCommand: true });
     expect(config.conversation).toEqual({ enabled: false, includeAssistant: true });
   });
+  it("bounds concurrent reviews and validates redaction patterns", () => {
+    const reviewer = parsePluginConfiguration({
+      options: {
+        reviewer: { maxConcurrentReviews: 2, redact: { enabled: false, patterns: ["acct-\\d+"] } },
+      },
+    }).reviewer;
+    expect(reviewer.maxConcurrentReviews).toBe(2);
+    expect(reviewer.redact).toEqual({ enabled: false, patterns: ["acct-\\d+"] });
+    for (const options of [
+      { reviewer: { maxConcurrentReviews: 0 } },
+      { reviewer: { maxConcurrentReviews: 33 } },
+      { reviewer: { maxConcurrentReviews: 1.5 } },
+      { reviewer: { redact: { patterns: ["("] } } },
+      { reviewer: { redact: { patterns: [""] } } },
+      { reviewer: { redact: { patterns: ["a*"] } } },
+    ]) {
+      expect(() => parsePluginConfiguration({ options })).toThrow(
+        "Invalid auto-approval plugin options",
+      );
+    }
+  });
+
   it("reads escalate rules and bounds them", () => {
     expect(
       parsePluginConfiguration({
@@ -74,6 +96,8 @@ describe("parsePluginConfiguration", () => {
         agent: { runtime: "opencode", maxInputBytes: 200_000, cleanupSessions: false },
         timeoutMs: 30_000,
         recordUsage: true,
+        maxConcurrentReviews: 4,
+        redact: { enabled: true, patterns: [] },
       },
     });
   });
@@ -105,6 +129,8 @@ describe("parsePluginConfiguration", () => {
         },
         timeoutMs: 12_000,
         recordUsage: true,
+        maxConcurrentReviews: 4,
+        redact: { enabled: true, patterns: [] },
       },
     });
   });
@@ -1335,6 +1361,8 @@ describe("parsePluginConfiguration", () => {
         agent: { runtime: "opencode", maxInputBytes: 200_000, cleanupSessions: false },
         timeoutMs: 30_000,
         recordUsage: true,
+        maxConcurrentReviews: 4,
+        redact: { enabled: true, patterns: [] },
         decision: {
           provider: "typesafe",
           apiKey: "option-key",

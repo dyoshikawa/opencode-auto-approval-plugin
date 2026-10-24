@@ -142,6 +142,10 @@ export type PluginConfiguration = {
     replaceDefaultPolicy?: true;
     /** Whether decision and chat reviews are appended to the usage log. */
     recordUsage: boolean;
+    /** Reviews running at once; more wait for a slot, then escalate. */
+    maxConcurrentReviews: number;
+    /** Credentials replaced before anything reaches a reviewer. */
+    redact: { enabled: boolean; patterns: string[] };
     decision?: DecisionConfiguration;
     chat?: ChatConfiguration;
   };
@@ -269,6 +273,15 @@ const decisionOptionsSchema = z.discriminatedUnion("provider", [
   }),
 ]);
 
+/** A pattern that compiles and cannot match the empty string (it would match everywhere). */
+function isRegExp(source: string): boolean {
+  try {
+    return !new RegExp(source).test("");
+  } catch {
+    return false;
+  }
+}
+
 /** Whitespace alone would normalize to a pattern that matches nothing. */
 function hasText(value: string): boolean {
   return value.trim() !== "";
@@ -315,6 +328,17 @@ const pluginConfigurationSchema = z.object({
       ),
       replaceDefaultPolicy: z.optional(z.boolean()),
       recordUsage: z.optional(z.boolean()),
+      maxConcurrentReviews: z.optional(z.int().check(z.gte(1), z.lte(32))),
+      redact: z.optional(
+        z.object({
+          enabled: z.optional(z.boolean()),
+          patterns: z.optional(
+            z
+              .array(z.string().check(z.minLength(1), z.maxLength(500), z.refine(isRegExp)))
+              .check(z.maxLength(50)),
+          ),
+        }),
+      ),
       // Checked only when the decision backend reads them, so another backend
       // starts whatever they hold. `decisionModel` and `jev` are deprecated.
       decision: z.optional(z.unknown()),
@@ -363,6 +387,7 @@ export function parsePluginConfiguration(input: {
       ...(instructions === undefined ? {} : { instructions }),
       ...replaceDefaultPolicyOption({ enabled: reviewer?.replaceDefaultPolicy, instructions }),
       recordUsage: reviewer?.recordUsage ?? true,
+      ...reviewBounds(reviewer),
       ...(decision === undefined ? {} : { decision }),
       ...(backend === "chat" || decision?.onOversize === "chat"
         ? { chat: chatConfiguration({ options: reviewer?.chat, env }) }
@@ -371,6 +396,19 @@ export function parsePluginConfiguration(input: {
   };
   assertInstructionsFit(configuration);
   return configuration;
+}
+
+/** How many reviews run at once and what is redacted before one starts. */
+function reviewBounds(
+  reviewer: ReviewerOptions | undefined,
+): Pick<PluginConfiguration["reviewer"], "maxConcurrentReviews" | "redact"> {
+  return {
+    maxConcurrentReviews: reviewer?.maxConcurrentReviews ?? 4,
+    redact: {
+      enabled: reviewer?.redact?.enabled ?? true,
+      patterns: reviewer?.redact?.patterns ?? [],
+    },
+  };
 }
 
 function modeConfiguration(input: {

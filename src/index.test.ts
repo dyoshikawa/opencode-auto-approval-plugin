@@ -135,6 +135,63 @@ describe("plugin entrypoint", () => {
       "https://openrouter.ai/api/v1/chat/completions",
     ]);
   });
+  it.each([true, false])(
+    "sends the chat backend a redacted operation unless redaction is off (enabled: %s)",
+    async (enabled) => {
+      const hooks: Record<string, (event: Record<string, unknown>) => Promise<void>> = {};
+      const registration = { dispose: async () => undefined };
+      const bodies: string[] = [];
+      const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body));
+        const prompt: string = JSON.parse(String(init?.body)).messages[1].content;
+        const check = /Review check: "([\da-f-]+)"/.exec(prompt)?.[1];
+        return Response.json({
+          choices: [
+            { message: { content: JSON.stringify({ verdict: "allow", reason: "ok", check }) } },
+          ],
+        });
+      });
+      vi.stubGlobal("fetch", fetch);
+      try {
+        await plugin.setup({
+          options: {
+            mode: "all-tools",
+            reviewer: {
+              backend: "chat",
+              recordUsage: false,
+              redact: { enabled },
+              chat: {
+                apiKey: "or-key-123456",
+                baseURL: "https://openrouter.ai/api/v1",
+                model: "m",
+              },
+            },
+          },
+          location: { directory: "/workspace" },
+          session: { hook: async () => registration, create: vi.fn() },
+          agent: { transform: async () => registration },
+          permission: { hook: async () => registration },
+          tool: {
+            hook: async (
+              name: string,
+              callback: (event: Record<string, unknown>) => Promise<void>,
+            ) => {
+              hooks[name] = callback;
+              return registration;
+            },
+          },
+        } as never);
+        const input = { command: "GH_TOKEN=ghp_secret-value gh pr list" };
+        await hooks["execute.before"]?.({ sessionID: "s", tool: "bash", input });
+        expect(input.command).toBe("GH_TOKEN=ghp_secret-value gh pr list");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]?.includes("ghp_secret-value")).toBe(!enabled);
+      expect(bodies[0]?.includes("GH_TOKEN=[REDACTED]")).toBe(enabled);
+    },
+  );
   it.each(["on-ask", "all-tools"])(
     "escalates an operation matching an escalate rule before any reviewer runs (%s)",
     async (mode) => {

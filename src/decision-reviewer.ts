@@ -8,6 +8,7 @@ import {
   assertReadWhole,
   estimateTokens,
   OversizeError,
+  redactionNote,
   sanitizeReason,
   userInstructionsPreamble,
   userPolicyPreamble,
@@ -60,12 +61,19 @@ const policyCriteria = {
 // The policy lives in `instructions`: the model follows guidance there, while text in
 // the state is data it judges. The user's own instructions therefore go there
 // too, never into the state.
-function verdictQuestion(input: { instructions?: string; replaceDefaultPolicy: boolean }) {
+function verdictQuestion(input: {
+  instructions?: string;
+  replaceDefaultPolicy: boolean;
+  serializedState: string;
+}) {
+  const note = redactionNote(input.serializedState)
+    .map((line) => `\n${line}`)
+    .join("");
   // The configuration never enables replaceDefaultPolicy without instructions.
   if (input.replaceDefaultPolicy && input.instructions !== undefined) {
     return {
       type: "choice",
-      instructions: `${policyFreeInstructions}\n${userPolicyPreamble}\n${input.instructions}`,
+      instructions: `${policyFreeInstructions}${note}\n${userPolicyPreamble}\n${input.instructions}`,
       criteria: policyCriteria,
     } as const;
   }
@@ -73,8 +81,8 @@ function verdictQuestion(input: { instructions?: string; replaceDefaultPolicy: b
     type: "choice",
     instructions:
       input.instructions === undefined
-        ? verdictInstructions
-        : `${verdictInstructions}\n${userInstructionsPreamble}\n${input.instructions}`,
+        ? `${verdictInstructions}${note}`
+        : `${verdictInstructions}${note}\n${userInstructionsPreamble}\n${input.instructions}`,
     criteria: verdictCriteria,
   } as const;
 }
@@ -291,6 +299,7 @@ export class DecisionReviewer implements Reviewer {
           verdict: verdictQuestion({
             instructions: this.#instructions,
             replaceDefaultPolicy: this.#replaceDefaultPolicy,
+            serializedState: JSON.stringify(input.state),
           }),
         },
       },
