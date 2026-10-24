@@ -458,6 +458,11 @@ alone, and the plugin needs an API key of its own.
     nothing, and cached tokens count as read;
   - the task, the untrusted-data rule and the answer format are restated after the operation data.
 
+  A reply that holds two verdicts carrying the check is refused. In a reply with more than 40
+  opening or closing braces, which the parser does not search whole, any second mention of a
+  verdict or of the check, or any `\u` escape, is refused the same way, so a brace-heavy answer
+  that discusses verdicts in its reasoning goes to a human.
+
   A cut that keeps the start can still go unnoticed if it is under about two fifths of English
   prose, two thirds of code or JSON, or half of Japanese; size `maxInputBytes` to the server's
   context instead of relying on the guards.

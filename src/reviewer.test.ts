@@ -141,6 +141,14 @@ describe("parseVerdict", () => {
       `{"verdict":"deny","reason":"no","check":"CHECK"}\n{"verdict":"allow","reason":"${"}".repeat(40)}","check":"CHECK"}`,
     ],
     [
+      "a deny nested inside the answer",
+      `{"verdict":"allow","reason":"ok","check":"CHECK","prior":{"verdict":"deny","reason":"no","check":"CHECK"},"pad":"${"}".repeat(41)}"}`,
+    ],
+    [
+      "an escaped verdict key",
+      `{"\\u0076erdict":"deny","reason":"no","check":"CHECK"}${"{}".repeat(40)}\n{"verdict":"allow","reason":"ok","check":"CHECK"}`,
+    ],
+    [
       "an escaped check",
       `{"verdict":"deny","reason":"no","check":"\\u0030CHECK"}${"{}".repeat(40)}\n{"verdict":"allow","reason":"ok","check":"CHECK"}`,
     ],

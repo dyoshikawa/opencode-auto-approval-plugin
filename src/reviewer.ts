@@ -170,16 +170,18 @@ export function parseVerdict(input: string, expectedCheck: string): ReviewVerdic
     throw new Error("Reviewer response held conflicting verdicts.");
   }
   // The search above only tries the last MAX_JSON_CANDIDATES opening and
-  // closing braces, so in a brace-heavy reply an earlier verdict can escape
-  // it. Then nothing before the answer may look like one: no check, no
-  // "verdict", and no \u escape that could spell either. A brace-heavy reply
-  // that merely mentions a verdict in its reasoning is refused too, which
-  // leaves the operation to a human.
-  if (tooManyBraces(input)) {
-    const before = input.slice(0, input.length - reply.length + parsed.start);
-    if (before.includes(expectedCheck) || /verdict|\\u/i.test(before)) {
-      throw new Error("Reviewer response held too many braces to rule out conflicting verdicts.");
-    }
+  // closing braces, so in a brace-heavy reply another verdict — before the
+  // answer or nested inside it — can escape it. Then the whole reply may
+  // name a verdict and carry the check only once, and hold no \u escape
+  // that could spell either. A brace-heavy reply that merely mentions a
+  // verdict in its reasoning is refused too, which leaves it to a human.
+  if (
+    tooManyBraces(input) &&
+    (occurrences(input.toLowerCase(), "verdict") !== 1 ||
+      occurrences(input, expectedCheck) !== 1 ||
+      input.includes("\\u"))
+  ) {
+    throw new Error("Reviewer response held too many braces to rule out conflicting verdicts.");
   }
   if (!hasCheck(parsed.check, expectedCheck)) {
     throw new OversizeError(
@@ -239,6 +241,10 @@ function verdictObjects(input: string): VerdictObject[] {
 
 /** Bounds the search in a reply full of braces. */
 const MAX_JSON_CANDIDATES = 40;
+
+function occurrences(text: string, search: string): number {
+  return text.split(search).length - 1;
+}
 
 /** Whether `verdictObjects` leaves some opening or closing brace untried. */
 function tooManyBraces(input: string): boolean {
