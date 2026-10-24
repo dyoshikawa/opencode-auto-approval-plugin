@@ -75,28 +75,42 @@ function matchingRule(input: {
   return undefined;
 }
 
-/** Keys whose string is file content: what is written, not where or how. */
-const contentKeys = new Set(["content", "oldstring", "newstring", "text"]);
-/** Keys whose string is a patch: matched through the paths it names. */
-const patchKeys = new Set(["patchtext", "patch"]);
-const patchPath = /^\*\*\* (?:add file|update file|delete file|move to): (.+)$/gim;
-/** Shell words: a path or flag stays one candidate whatever quotes or operators wrap it. */
-const shellSeparators = /[\s"'`;|&<>(){}=]+/;
+/** Built-in file tools whose content keys say what is written, not where. */
+const fileTools = new Set(["write", "edit", "multiedit"]);
+const contentKeys = new Set(["content", "oldstring", "newstring"]);
+/** Derived text in a permission request's metadata: diffs and previews, not where or how. */
+const metadataContentKeys = new Set([
+  "diff",
+  "content",
+  "oldstring",
+  "newstring",
+  "preview",
+  "output",
+]);
+/** Built-in patch tools, matched through the file paths their headers name. */
+const patchTools = new Set(["apply_patch", "patch"]);
+// OpenCode trims a header line before reading it, so indentation is allowed.
+const patchPath = /^[ \t]*\*\*\* (?:add file|update file|delete file|move to): (.+)$/gim;
+/** Words: a path or flag stays one candidate whatever quotes or operators wrap it. */
+const separators = /[\s"'`;|&<>(){}=]+/;
 
 /**
- * What a rule's resource is matched against, normalized and de-duplicated:
- *
- * - a permission request's resources or patterns (not its metadata, which
- *   holds diffs), each as a whole and word by word;
- * - in a tool input, a `command` as a whole, line by line and word by word,
- *   a patch through the file paths its headers name, and every other string
- *   as a whole. File contents (`content`, `oldString`, `newString`) are not
- *   matched: a path rule must not fire on code that mentions `process.env`.
+ * What a rule's resource is matched against, normalized and de-duplicated.
+ * Every string value — a permission request's resources, patterns and
+ * metadata (except the diffs and previews in it; older OpenCode 1.x asks
+ * carry the path only as `metadata.filePath`), every string in a tool
+ * input — is matched as
+ * a whole, line by line and word by word, with two exceptions for built-in
+ * tools: the contents a `write`, `edit` or `multiedit` writes are skipped (a
+ * path rule must not fire on code that mentions `process.env`), and an
+ * `apply_patch` / `patch` patch is matched through the file paths its
+ * headers name.
  *
  * `"unchecked"` when the operation is too large or deep to walk.
  */
 function candidatesOf(request: ReviewRequest): string[] | "unchecked" {
   const permission = request.source === "permission-request";
+  const tool = permission ? "" : request.action.toLowerCase();
   const candidates = new Set<string>();
   let strings = 0;
   let characters = 0;
@@ -106,33 +120,37 @@ function candidatesOf(request: ReviewRequest): string[] | "unchecked" {
     candidates.add(folded);
     characters += folded.length;
   };
-  const addWords = (value: string) => {
+  const addAll = (value: string) => {
     add(value);
-    for (const line of value.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
+    for (const line of withoutContinuations(value).split(/\r?\n/)) {
       add(line);
-      for (const word of line.split(shellSeparators)) add(word);
+      for (const word of line.split(separators)) add(word);
     }
   };
-  const visit = (value: unknown, key: string, depth: number): boolean => {
+  const skipped = (key: string, inMetadata: boolean): boolean =>
+    inMetadata ? metadataContentKeys.has(key) : fileTools.has(tool) && contentKeys.has(key);
+  const visit = (value: unknown, key: string, depth: number, inMetadata: boolean): boolean => {
     if (typeof value === "string") {
       strings++;
-      if (permission || key === "command") addWords(value);
-      else if (patchKeys.has(key)) {
+      if (patchTools.has(tool) && key === "patchtext") {
         for (const match of value.matchAll(patchPath)) add(match[1] ?? "");
-      } else if (!contentKeys.has(key)) add(value);
+      } else if (!skipped(key, inMetadata)) {
+        addAll(value);
+      }
       return strings <= maxStrings && characters <= maxCandidateCharacters;
     }
     if (!isRecord(value)) return true;
     if (depth >= maxDepth) return false;
     return Object.entries(value).every(([child, item]) =>
-      visit(item, Array.isArray(value) ? key : child.toLowerCase(), depth + 1),
+      visit(
+        item,
+        Array.isArray(value) ? key : child.toLowerCase(),
+        depth + 1,
+        inMetadata || (permission && depth === 0 && child === "metadata"),
+      ),
     );
   };
-  const resource =
-    permission && isRecord(request.resource)
-      ? Object.fromEntries(Object.entries(request.resource).filter(([name]) => name !== "metadata"))
-      : request.resource;
-  return visit(resource, "", 0) ? [...candidates] : "unchecked";
+  return visit(request.resource, "", 0, false) ? [...candidates] : "unchecked";
 }
 
 /**
@@ -140,12 +158,12 @@ function candidatesOf(request: ReviewRequest): string[] | "unchecked" {
  * shell line continuations and how much whitespace separates words; folding
  * more than needed only escalates more.
  */
+function withoutContinuations(value: string): string {
+  return value.replace(/\\\r?\n/g, "");
+}
+
 function normalized(value: string): string {
-  return value
-    .replace(/\\\r?\n/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return withoutContinuations(value).replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 /**
