@@ -125,7 +125,21 @@ describe("parsePluginConfiguration", () => {
           },
         },
       }),
-    ).toThrow('reviewer.agent.cleanupSessions requires reviewer.agent.runtime "opencode".');
+    ).toThrow(
+      'Invalid auto-approval plugin options: reviewer.agent.cleanupSessions needs reviewer.agent.runtime "opencode".',
+    );
+    // Like the SDK path options, any value for another runtime is rejected.
+    for (const cleanupSessions of [true, false]) {
+      expect(() =>
+        parsePluginConfiguration({
+          options: { reviewer: { agent: { runtime: "claude-agent-sdk", cleanupSessions } } },
+        }),
+      ).toThrow("reviewer.agent.cleanupSessions needs");
+    }
+    expect(
+      parsePluginConfiguration({ options: { reviewer: { agent: { cleanupSessions: false } } } })
+        .reviewer.agent,
+    ).toMatchObject({ runtime: "opencode", cleanupSessions: false });
   });
 
   describe("agent runtime", () => {
