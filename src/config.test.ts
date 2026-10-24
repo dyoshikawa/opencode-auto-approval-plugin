@@ -41,12 +41,34 @@ describe("parsePluginConfiguration", () => {
     expect(config.auditLog).toEqual({ enabled: true, path, includeCommand: true });
     expect(config.conversation).toEqual({ enabled: false, includeAssistant: true });
   });
+  it("reads escalate rules and bounds them", () => {
+    expect(
+      parsePluginConfiguration({
+        options: { escalate: [{ action: "bash", resource: "git push *" }, { action: "webfetch" }] },
+      }).escalate,
+    ).toEqual([{ action: "bash", resource: "git push *" }, { action: "webfetch" }]);
+    for (const escalate of [
+      [{ action: "" }],
+      [{ action: "bash", resource: "" }],
+      [{ action: "bash", resource: "   " }],
+      [{ action: " " }],
+      [{ resource: "git push *" }],
+      Array.from({ length: 201 }, () => ({ action: "bash" })),
+      "bash",
+    ]) {
+      expect(() => parsePluginConfiguration({ options: { escalate } })).toThrow(
+        "Invalid auto-approval plugin options",
+      );
+    }
+  });
+
   it("uses the safe on-ask defaults", () => {
     expect(parsePluginConfiguration({ options: {}, env: {} })).toEqual({
       mode: "on-ask",
       allToolsNativeAsks: "preserve",
       auditLog: { enabled: false, includeCommand: false },
       conversation: { enabled: false, includeAssistant: false },
+      escalate: [],
       reviewer: {
         backend: "agent",
         agent: { runtime: "opencode", maxInputBytes: 200_000, cleanupSessions: false },
@@ -72,6 +94,7 @@ describe("parsePluginConfiguration", () => {
       allToolsNativeAsks: "preserve",
       auditLog: { enabled: false, includeCommand: false },
       conversation: { enabled: false, includeAssistant: false },
+      escalate: [],
       reviewer: {
         backend: "agent",
         agent: {
