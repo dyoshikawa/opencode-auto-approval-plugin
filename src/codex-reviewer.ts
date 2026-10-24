@@ -16,7 +16,10 @@ import { importSdk } from "./sdk-loader.js";
 import type { UsageRecorder } from "./usage.js";
 
 const sdkPackage = "@openai/codex-sdk";
-/** The first SDK with `configOverrides`, which keeps the project's Codex config out. */
+/**
+ * The SDK version the project-trust override (`configOverrides`) was verified
+ * to keep the project's Codex config out with.
+ */
 const minimumSdkVersion = "0.163.0";
 
 /** The subset of the SDK's `Codex` class the reviewer uses. */
@@ -219,6 +222,9 @@ export async function loadCodex(input: { sdkPath?: string }): Promise<CreateCode
     option: "reviewer.agent.codexSdk.path",
     ...input,
     importInstalled: () => import("@openai/codex-sdk"),
+    // The CJS build has no `import.meta`, so resolving throws there and the
+    // installed copy is refused; `reviewer.agent.codexSdk.path` still works.
+    resolveInstalled: () => import.meta.resolve("@openai/codex-sdk"),
     minimumVersion: minimumSdkVersion,
   });
   const Codex = module.Codex;
