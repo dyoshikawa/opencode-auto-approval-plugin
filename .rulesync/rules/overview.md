@@ -16,8 +16,7 @@ tool permission requests based on configurable rules. It is published to npm as 
 package built from `src/index.ts`.
 
 The repository is scaffolded from
-[dyoshikawa/ts-template](https://github.com/dyoshikawa/ts-template); the plugin implementation
-itself is not written yet, so `src/index.ts` still holds the template's sample export.
+[dyoshikawa/ts-template](https://github.com/dyoshikawa/ts-template).
 
 - Manage runtimes and package managers with @mise.toml .
 - AI tool configurations (`AGENTS.md`, `CLAUDE.md`, `.claude/`, `.github/instructions/`, …) are
