@@ -6,6 +6,7 @@ import {
   assertReadWhole,
   OversizeError,
   parseVerdict,
+  recordedReview,
   type Reviewer,
   type ReviewRequest,
   type ReviewVerdict,
@@ -95,27 +96,24 @@ export class ChatReviewer implements Reviewer {
     return false;
   }
 
-  async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const startedAt = Date.now();
-    const tokens = { input: null as number | null, output: null as number | null };
-    try {
-      const decision = await this.#review({ request: input, tokens });
-      this.#record({ startedAt, tokens, verdict: decision.verdict });
-      return decision;
-    } catch (error) {
-      this.#record({
-        startedAt,
-        tokens,
-        verdict: error instanceof OversizeError ? "oversize" : "error",
-      });
-      throw error;
-    }
+  review(input: ReviewRequest): Promise<ReviewVerdict> {
+    const tokens: Tokens = { input: null, output: null };
+    return recordedReview({
+      recordUsage: this.#recordUsage,
+      review: () => this.#review({ request: input, tokens }),
+      usage: () => ({
+        provider: "chat",
+        model: this.#configuration.model,
+        project: this.#project,
+        inputTokens: tokens.input,
+        outputTokens: tokens.output,
+        // Chat models are priced per provider and model; none is assumed.
+        costUSD: tokens.input === 0 ? 0 : null,
+      }),
+    });
   }
 
-  async #review(input: {
-    request: ReviewRequest;
-    tokens: { input: number | null; output: number | null };
-  }): Promise<ReviewVerdict> {
+  async #review(input: { request: ReviewRequest; tokens: Tokens }): Promise<ReviewVerdict> {
     const check = reviewCheck();
     const prompt = reviewerPrompt({
       request: input.request,
@@ -254,31 +252,6 @@ export class ChatReviewer implements Reviewer {
       );
     }
     return new Error(`Chat model request failed with HTTP ${result.status}.`);
-  }
-
-  #record(input: {
-    startedAt: number;
-    tokens: { input: number | null; output: number | null };
-    verdict: ReviewVerdict["verdict"] | "error" | "oversize";
-  }): void {
-    if (this.#recordUsage === undefined) return;
-    try {
-      this.#recordUsage({
-        v: 1,
-        time: new Date(input.startedAt).toISOString(),
-        provider: "chat",
-        model: this.#configuration.model,
-        project: this.#project,
-        inputTokens: input.tokens.input,
-        outputTokens: input.tokens.output,
-        latencyMs: Math.max(0, Date.now() - input.startedAt),
-        verdict: input.verdict,
-        // Chat models are priced per provider and model; none is assumed.
-        costUSD: input.tokens.input === 0 ? 0 : null,
-      });
-    } catch {
-      // The usage log must never decide a review.
-    }
   }
 }
 

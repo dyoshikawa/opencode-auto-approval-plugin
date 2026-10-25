@@ -4,6 +4,7 @@ import type { ModelReference } from "./config.js";
 import type { ConversationContext } from "./conversation.js";
 import { conversationInstructions, reviewState } from "./review-state.js";
 import { isRecord } from "./shared.js";
+import type { UsageRecord, UsageRecorder } from "./usage.js";
 
 /**
  * The contract every review backend shares, and the helpers they all use.
@@ -280,6 +281,64 @@ export class OversizeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "OversizeError";
+  }
+}
+
+/** What a backend reports to the usage log about one review, besides its timing and verdict. */
+type ReviewUsage = Pick<
+  UsageRecord,
+  "provider" | "model" | "project" | "inputTokens" | "outputTokens" | "costUSD"
+>;
+
+/**
+ * Runs one review and appends it to the usage log, successful or not: an
+ * `OversizeError` as `oversize`, any other failure as `error`. `usage` is read
+ * once the review has settled, so it sees the token counts the review filled
+ * in; it is not read at all without a recorder.
+ */
+export async function recordedReview(input: {
+  recordUsage: UsageRecorder | undefined;
+  review: () => Promise<ReviewVerdict>;
+  usage: () => ReviewUsage;
+}): Promise<ReviewVerdict> {
+  const startedAt = Date.now();
+  try {
+    const decision = await input.review();
+    recordReview({ ...input, startedAt, verdict: decision.verdict });
+    return decision;
+  } catch (error) {
+    recordReview({
+      ...input,
+      startedAt,
+      verdict: error instanceof OversizeError ? "oversize" : "error",
+    });
+    throw error;
+  }
+}
+
+function recordReview(input: {
+  recordUsage: UsageRecorder | undefined;
+  usage: () => ReviewUsage;
+  startedAt: number;
+  verdict: UsageRecord["verdict"];
+}): void {
+  if (input.recordUsage === undefined) return;
+  try {
+    const usage = input.usage();
+    input.recordUsage({
+      v: 1,
+      time: new Date(input.startedAt).toISOString(),
+      provider: usage.provider,
+      model: usage.model,
+      project: usage.project,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      latencyMs: Math.max(0, Date.now() - input.startedAt),
+      verdict: input.verdict,
+      costUSD: usage.costUSD,
+    });
+  } catch {
+    // The usage log must never decide a review.
   }
 }
 

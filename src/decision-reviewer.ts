@@ -8,6 +8,7 @@ import {
   assertReadWhole,
   estimateTokens,
   OversizeError,
+  recordedReview,
   redactionNote,
   sanitizeReason,
   userInstructionsPreamble,
@@ -161,47 +162,24 @@ export class DecisionReviewer implements Reviewer {
     return false;
   }
 
-  async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const startedAt = Date.now();
+  review(input: ReviewRequest): Promise<ReviewVerdict> {
     const tokens = { input: null as number | null, output: null as number | null };
-    try {
-      const decision = await this.#review({ request: input, tokens });
-      this.#record({ startedAt, tokens, verdict: decision.verdict });
-      return decision;
-    } catch (error) {
-      // A failed call may still be billed (a timeout after the model ran).
-      this.#record({
-        startedAt,
-        tokens,
-        verdict: error instanceof OversizeError ? "oversize" : "error",
-      });
-      throw error;
-    }
-  }
-
-  #record(input: {
-    startedAt: number;
-    tokens: { input: number | null; output: number | null };
-    verdict: ReviewVerdict["verdict"] | "error" | "oversize";
-  }): void {
-    if (this.#recordUsage === undefined) return;
-    const { provider, model, endpoint } = this.#configuration;
-    try {
-      this.#recordUsage({
-        v: 1,
-        time: new Date(input.startedAt).toISOString(),
-        provider,
-        model,
-        project: this.#project,
-        inputTokens: input.tokens.input,
-        outputTokens: input.tokens.output,
-        latencyMs: Math.max(0, Date.now() - input.startedAt),
-        verdict: input.verdict,
-        costUSD: costUSD({ provider, endpoint, model, inputTokens: input.tokens.input }),
-      });
-    } catch {
-      // The usage log must never decide a review.
-    }
+    // A failed call is recorded too: it may still be billed (a timeout after the model ran).
+    return recordedReview({
+      recordUsage: this.#recordUsage,
+      review: () => this.#review({ request: input, tokens }),
+      usage: () => {
+        const { provider, model, endpoint } = this.#configuration;
+        return {
+          provider,
+          model,
+          project: this.#project,
+          inputTokens: tokens.input,
+          outputTokens: tokens.output,
+          costUSD: costUSD({ provider, endpoint, model, inputTokens: tokens.input }),
+        };
+      },
+    });
   }
 
   async #review(input: {
