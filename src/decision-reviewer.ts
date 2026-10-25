@@ -23,6 +23,8 @@ import { costUSD, type UsageRecorder } from "./usage.js";
  * opened, so the reviewer never inspects the workspace.
  */
 
+type Tokens = { input: number | null; output: number | null };
+
 const verdicts = ["allow", "deny", "escalate"] as const;
 
 const stateIntroduction =
@@ -163,7 +165,7 @@ export class DecisionReviewer implements Reviewer {
   }
 
   review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const tokens = { input: null as number | null, output: null as number | null };
+    const tokens: Tokens = { input: null, output: null };
     // A failed call is recorded too: it may still be billed (a timeout after the model ran).
     return recordedReview({
       recordUsage: this.#recordUsage,
@@ -182,10 +184,7 @@ export class DecisionReviewer implements Reviewer {
     });
   }
 
-  async #review(input: {
-    request: ReviewRequest;
-    tokens: { input: number | null; output: number | null };
-  }): Promise<ReviewVerdict> {
+  async #review(input: { request: ReviewRequest; tokens: Tokens }): Promise<ReviewVerdict> {
     const state = reviewState(input.request);
     const { model, maxStateTokens, longContext } = this.#configuration;
     const serialized = JSON.stringify(state);

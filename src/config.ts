@@ -360,7 +360,7 @@ export function parsePluginConfiguration(input: {
 }): PluginConfiguration {
   const result = z.safeParse(pluginConfigurationSchema, input.options);
   if (!result.success) {
-    throw invalidOptions(`${result.error.message}`);
+    throw invalidOptions(result.error.message);
   }
 
   const reviewer = result.data.reviewer;
