@@ -522,6 +522,13 @@ function normalizedBackend(
   }
 }
 
+/** The reviewer API keys in use, which redaction replaces wherever they appear. */
+export function reviewerApiKeys(configuration: PluginConfiguration): string[] {
+  return [configuration.reviewer.decision?.apiKey, configuration.reviewer.chat?.apiKey].filter(
+    (apiKey) => apiKey !== undefined,
+  );
+}
+
 /**
  * Whether the read-only OpenCode reviewer agent is used: as the backend, or
  * for operations too large for the decision model. The SDK runtimes review

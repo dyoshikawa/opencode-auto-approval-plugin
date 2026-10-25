@@ -4,6 +4,7 @@ import { ChatReviewer } from "./chat-reviewer.js";
 import { ClaudeAgentReviewer } from "./claude-agent-reviewer.js";
 import { CodexReviewer } from "./codex-reviewer.js";
 import { ConcurrencyLimitedReviewer } from "./concurrency-limit.js";
+import { reviewerApiKeys } from "./config.js";
 import { DecisionReviewer } from "./decision-reviewer.js";
 import { EscalationRulesReviewer } from "./escalation-rules.js";
 import { OversizeFallbackReviewer } from "./fallback-reviewer.js";
@@ -44,9 +45,7 @@ function boundedReviewer(input: {
   const redacted = reviewer.redact.enabled
     ? new RedactingReviewer({
         reviewer: input.reviewer,
-        apiKeys: [reviewer.decision?.apiKey, reviewer.chat?.apiKey].filter(
-          (apiKey) => apiKey !== undefined,
-        ),
+        apiKeys: reviewerApiKeys(input.input.configuration),
         patterns: reviewer.redact.patterns.map((source) => new RegExp(source, "g")),
       })
     : input.reviewer;

@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { PluginConfiguration } from "./config.js";
+import { type PluginConfiguration, reviewerApiKeys } from "./config.js";
 import { redactSecrets } from "./redaction.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import { isRecord } from "./shared.js";
@@ -68,10 +68,7 @@ function commandForAudit(input: {
     if (isRecord(resource) && typeof resource.command === "string") {
       const redacted = redactCommand({
         command: resource.command,
-        apiKeys: [
-          configuration.reviewer.decision?.apiKey,
-          configuration.reviewer.chat?.apiKey,
-        ].filter((apiKey) => apiKey !== undefined),
+        apiKeys: reviewerApiKeys(configuration),
       });
       return { command: redacted.command, commandTruncated: redacted.truncated };
     }
