@@ -51,6 +51,25 @@ export async function reviewToolCallOrThrow(input: {
   throw new Error(`Auto-approval reviewer ${outcome}: ${decision.reason}`);
 }
 
+/** Stop waiting for `promise` after `ms`; the underlying work is not cancelled. */
+export async function withTimeout<T>(input: {
+  promise: Promise<T>;
+  ms: number;
+  message: string;
+}): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      input.promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(input.message)), input.ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function textFromParts(input: {
   parts: unknown[];
   skipSyntheticOrIgnored?: boolean;
