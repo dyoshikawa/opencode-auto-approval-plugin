@@ -697,9 +697,9 @@ function typeSafeConfiguration(input: {
   // The key and the base URL must come from the same place: whoever serves
   // the base URL receives the key and decides every verdict, so one source
   // must not be able to redirect a key supplied by another.
-  const optionKey = nonEmpty(input.options.apiKey?.trim());
-  const envKey = nonEmpty(input.env.TYPESAFE_API_KEY?.trim());
-  const optionBaseURL = nonEmpty(input.options.baseURL?.trim());
+  const optionKey = nonBlank(input.options.apiKey);
+  const envKey = nonBlank(input.env.TYPESAFE_API_KEY);
+  const optionBaseURL = nonBlank(input.options.baseURL);
   if (optionKey === undefined && optionBaseURL !== undefined) {
     throw invalidOptions(
       `${input.prefix}.baseURL needs ${input.prefix}.apiKey next to it; with TYPESAFE_API_KEY use TYPESAFE_BASE_URL.`,
@@ -707,7 +707,7 @@ function typeSafeConfiguration(input: {
   }
   const source =
     optionKey === undefined
-      ? { apiKey: envKey, baseURL: nonEmpty(input.env.TYPESAFE_BASE_URL?.trim()) }
+      ? { apiKey: envKey, baseURL: nonBlank(input.env.TYPESAFE_BASE_URL) }
       : { apiKey: optionKey, baseURL: optionBaseURL };
   const apiKey = source.apiKey;
   if (apiKey === undefined) {
@@ -780,8 +780,7 @@ function cloudflareConfiguration(input: {
       `${input.prefix}.longContext is only available with the typesafe provider.`,
     );
   }
-  const apiKey =
-    nonEmpty(input.options.apiKey?.trim()) ?? nonEmpty(input.env.CLOUDFLARE_API_TOKEN?.trim());
+  const apiKey = nonBlank(input.options.apiKey) ?? nonBlank(input.env.CLOUDFLARE_API_TOKEN);
   if (apiKey === undefined) {
     throw invalidOptions(
       `the cloudflare provider needs ${input.prefix}.apiKey or CLOUDFLARE_API_TOKEN.`,
@@ -789,7 +788,7 @@ function cloudflareConfiguration(input: {
   }
   // Account IDs are hexadecimal; the dashboard shows them in lowercase.
   const accountID = (
-    nonEmpty(input.options.accountId?.trim()) ?? nonEmpty(input.env.CLOUDFLARE_ACCOUNT_ID?.trim())
+    nonBlank(input.options.accountId) ?? nonBlank(input.env.CLOUDFLARE_ACCOUNT_ID)
   )?.toLowerCase();
   if (accountID === undefined) {
     throw invalidOptions(
@@ -848,8 +847,8 @@ function chatConfiguration(input: { options: unknown; env: Environment }): ChatC
   if (provider !== "openai-compatible") {
     return vendorChatConfiguration({ provider, options, env: input.env });
   }
-  const optionKey = nonEmpty(options.apiKey?.trim());
-  const optionBaseURL = nonEmpty(options.baseURL?.trim());
+  const optionKey = nonBlank(options.apiKey);
+  const optionBaseURL = nonBlank(options.baseURL);
   if (optionKey === undefined && optionBaseURL !== undefined) {
     throw invalidOptions(
       "reviewer.chat.baseURL needs reviewer.chat.apiKey next to it; with AUTO_APPROVAL_CHAT_API_KEY use AUTO_APPROVAL_CHAT_BASE_URL.",
@@ -858,8 +857,8 @@ function chatConfiguration(input: { options: unknown; env: Environment }): ChatC
   const source =
     optionKey === undefined
       ? {
-          apiKey: nonEmpty(input.env.AUTO_APPROVAL_CHAT_API_KEY?.trim()),
-          baseURL: nonEmpty(input.env.AUTO_APPROVAL_CHAT_BASE_URL?.trim()),
+          apiKey: nonBlank(input.env.AUTO_APPROVAL_CHAT_API_KEY),
+          baseURL: nonBlank(input.env.AUTO_APPROVAL_CHAT_BASE_URL),
         }
       : { apiKey: optionKey, baseURL: optionBaseURL };
   if (source.apiKey === undefined) {
@@ -883,12 +882,12 @@ function vendorChatConfiguration(input: {
 }): ChatConfiguration {
   const { endpoint, keyVariable } = vendorChatAPIs[input.provider];
   // Blank counts as unset, as for openai-compatible: `{env:NAME}` of an unset variable is "".
-  if (nonEmpty(input.options.baseURL?.trim()) !== undefined) {
+  if (nonBlank(input.options.baseURL) !== undefined) {
     throw invalidOptions(
       `reviewer.chat.baseURL is not used with the ${input.provider} provider; use provider "openai-compatible" for another endpoint.`,
     );
   }
-  const apiKey = nonEmpty(input.options.apiKey?.trim()) ?? nonEmpty(input.env[keyVariable]?.trim());
+  const apiKey = nonBlank(input.options.apiKey) ?? nonBlank(input.env[keyVariable]);
   if (apiKey === undefined) {
     throw invalidOptions(
       `the ${input.provider} provider needs reviewer.chat.apiKey or ${keyVariable}.`,
@@ -964,6 +963,8 @@ function parseOptions<T>(input: { schema: z.ZodMiniType<T>; value: unknown; pref
   return result.data;
 }
 
-function nonEmpty(input: string | undefined): string | undefined {
-  return input === undefined || input === "" ? undefined : input;
+/** The trimmed value, or `undefined` when it is unset or blank. */
+function nonBlank(input: string | undefined): string | undefined {
+  const trimmed = input?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
 }
