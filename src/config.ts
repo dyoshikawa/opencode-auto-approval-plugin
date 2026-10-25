@@ -72,7 +72,7 @@ export type DecisionConfiguration = {
   onOversize: OversizeAction;
 };
 
-export type LongContextConfiguration = {
+type LongContextConfiguration = {
   /** The estimated `state` size above which even a long-context request is not sent. */
   maxStateTokens: number;
   /** An `allow` from a long-context request below this probability is downgraded to `escalate`. */
@@ -85,7 +85,7 @@ export type LongContextConfiguration = {
  */
 const chatProviders = ["openai-compatible", "openai", "anthropic"] as const;
 
-export type ChatProvider = (typeof chatProviders)[number];
+type ChatProvider = (typeof chatProviders)[number];
 
 export type ChatConfiguration = {
   provider: ChatProvider;

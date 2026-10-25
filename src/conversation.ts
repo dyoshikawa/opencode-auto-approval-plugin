@@ -4,7 +4,7 @@ import { isRecord, textFromParts } from "./shared.js";
 export const HISTORY_TIMEOUT_MS = 1_000;
 export const HISTORY_MESSAGE_LIMIT = 32;
 export const MAX_CONVERSATION_TURNS = 8;
-export const MAX_CONVERSATION_CHARACTERS = 12_000;
+const MAX_CONVERSATION_CHARACTERS = 12_000;
 
 export type ConversationTurn = { role: "user" | "assistant"; text: string };
 export type ConversationContext = {
