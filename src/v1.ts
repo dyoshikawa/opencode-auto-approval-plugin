@@ -7,7 +7,7 @@ import {
   reviewerAllowedTools,
 } from "./agent-reviewer.js";
 import type { ModelReference, PluginConfiguration } from "./config.js";
-import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
+import { invalidOptions, usesAgentReviewer, parsePluginConfiguration } from "./config.js";
 import {
   conversationFromMessages,
   HISTORY_MESSAGE_LIMIT,
@@ -127,18 +127,14 @@ export function reviewerAgentConfig(): Record<string, unknown> {
 function rejectV2OnlyOptions(configuration: PluginConfiguration): void {
   // The native ask bridge needs V2's permission.evaluate hook.
   if (configuration.allToolsNativeAsks === "review") {
-    throw new Error(
-      'Invalid auto-approval plugin options: allToolsNativeAsks "review" needs OpenCode 2.x.',
-    );
+    throw invalidOptions('allToolsNativeAsks "review" needs OpenCode 2.x.');
   }
   // V1 reviewer sessions are never removed.
   if (
     configuration.reviewer.agent.runtime === "opencode" &&
     configuration.reviewer.agent.cleanupSessions
   ) {
-    throw new Error(
-      "Invalid auto-approval plugin options: reviewer.agent.cleanupSessions needs OpenCode 2.x.",
-    );
+    throw invalidOptions("reviewer.agent.cleanupSessions needs OpenCode 2.x.");
   }
 }
 

@@ -360,7 +360,7 @@ export function parsePluginConfiguration(input: {
 }): PluginConfiguration {
   const result = z.safeParse(pluginConfigurationSchema, input.options);
   if (!result.success) {
-    throw new Error(`Invalid auto-approval plugin options: ${result.error.message}`);
+    throw invalidOptions(`${result.error.message}`);
   }
 
   const reviewer = result.data.reviewer;
@@ -417,9 +417,7 @@ function modeConfiguration(input: {
 }): Pick<PluginConfiguration, "mode" | "allToolsNativeAsks"> {
   const mode = input.mode ?? "on-ask";
   if (input.allToolsNativeAsks === "review" && mode !== "all-tools") {
-    throw new Error(
-      'Invalid auto-approval plugin options: allToolsNativeAsks "review" needs mode "all-tools".',
-    );
+    throw invalidOptions('allToolsNativeAsks "review" needs mode "all-tools".');
   }
   return {
     mode,
@@ -435,8 +433,8 @@ function replaceDefaultPolicyOption(input: {
   if (input.instructions === undefined) {
     // Without a policy of its own the reviewer would be told nothing about
     // when to allow, deny or escalate.
-    throw new Error(
-      "Invalid auto-approval plugin options: reviewer.replaceDefaultPolicy needs reviewer.instructions to replace the built-in policy with.",
+    throw invalidOptions(
+      "reviewer.replaceDefaultPolicy needs reviewer.instructions to replace the built-in policy with.",
     );
   }
   return { replaceDefaultPolicy: true };
@@ -448,8 +446,8 @@ function replaceDefaultPolicyOption(input: {
  * review too large. That fails at startup instead of escalating every call.
  */
 function instructionsTooLarge({ size, limit }: { size: string; limit: string }): never {
-  throw new Error(
-    `Invalid auto-approval plugin options: reviewer.instructions (${size}) leave no room for the operation within ${limit}.`,
+  throw invalidOptions(
+    `reviewer.instructions (${size}) leave no room for the operation within ${limit}.`,
   );
 }
 
@@ -501,9 +499,7 @@ function auditConfiguration(
     path: input?.path,
   };
   if (configuration.enabled && !configuration.path) {
-    throw new Error(
-      "Invalid auto-approval plugin options: auditLog.path must be an absolute path when enabled.",
-    );
+    throw invalidOptions("auditLog.path must be an absolute path when enabled.");
   }
   return configuration;
 }
@@ -561,9 +557,7 @@ function reviewerInstructions({
       maxChars < maxInstructionsCharsCeiling
         ? `; raise reviewer.maxInstructionsChars (up to ${maxInstructionsCharsCeiling}) to allow more`
         : "";
-    throw new Error(
-      `Invalid auto-approval plugin options: reviewer.instructions must be at most ${maxChars} characters${hint}.`,
-    );
+    throw invalidOptions(`reviewer.instructions must be at most ${maxChars} characters${hint}.`);
   }
   return text;
 }
@@ -584,8 +578,8 @@ function rejectMixedNames(reviewer: ReviewerOptions | undefined): void {
   ] as const;
   for (const [current, deprecated, deprecatedName, replacement] of pairs) {
     if (current !== undefined && deprecated !== undefined) {
-      throw new Error(
-        `Invalid auto-approval plugin options: ${deprecatedName} is the deprecated name of ${replacement}; set only one.`,
+      throw invalidOptions(
+        `${deprecatedName} is the deprecated name of ${replacement}; set only one.`,
       );
     }
   }
@@ -600,15 +594,13 @@ function agentConfiguration(reviewer: ReviewerOptions | undefined): AgentConfigu
   // Options for another runtime would be silently ignored.
   for (const [name, { option }] of Object.entries(sdkRuntimes)) {
     if (agent[option] !== undefined && runtime !== name) {
-      throw new Error(
-        `Invalid auto-approval plugin options: reviewer.agent.${option} needs reviewer.agent.runtime "${name}".`,
-      );
+      throw invalidOptions(`reviewer.agent.${option} needs reviewer.agent.runtime "${name}".`);
     }
   }
   if (runtime !== "opencode") {
     if (agent.cleanupSessions !== undefined) {
-      throw new Error(
-        'Invalid auto-approval plugin options: reviewer.agent.cleanupSessions needs reviewer.agent.runtime "opencode".',
+      throw invalidOptions(
+        'reviewer.agent.cleanupSessions needs reviewer.agent.runtime "opencode".',
       );
     }
     return sdkAgentConfiguration({
@@ -619,8 +611,8 @@ function agentConfiguration(reviewer: ReviewerOptions | undefined): AgentConfigu
     });
   }
   if (typeof model === "string") {
-    throw new Error(
-      'Invalid auto-approval plugin options: with the "opencode" runtime, reviewer.agent.model must be { providerID, modelID }.',
+    throw invalidOptions(
+      'with the "opencode" runtime, reviewer.agent.model must be { providerID, modelID }.',
     );
   }
   return {
@@ -638,8 +630,8 @@ function sdkAgentConfiguration(input: {
   sdkPath: string | undefined;
 }): AgentConfiguration {
   if (input.model !== undefined && typeof input.model !== "string") {
-    throw new Error(
-      `Invalid auto-approval plugin options: with the "${input.runtime}" runtime, reviewer.agent.model must be a model name such as "${sdkRuntimes[input.runtime].example}".`,
+    throw invalidOptions(
+      `with the "${input.runtime}" runtime, reviewer.agent.model must be a model name such as "${sdkRuntimes[input.runtime].example}".`,
     );
   }
   return {
@@ -662,8 +654,8 @@ function decisionConfiguration(input: {
   const reviewer = input.reviewer;
   if (reviewer?.backend === "jev") {
     if (reviewer.decision !== undefined || reviewer.decisionModel !== undefined) {
-      throw new Error(
-        'Invalid auto-approval plugin options: the deprecated reviewer.backend "jev" reads reviewer.jev only; use reviewer.backend "decision" with reviewer.decision.',
+      throw invalidOptions(
+        'the deprecated reviewer.backend "jev" reads reviewer.jev only; use reviewer.backend "decision" with reviewer.decision.',
       );
     }
     const jev = parseOptions({
@@ -678,16 +670,16 @@ function decisionConfiguration(input: {
     });
   }
   if (reviewer?.jev !== undefined) {
-    throw new Error(
-      'Invalid auto-approval plugin options: reviewer.jev is only read with the deprecated reviewer.backend "jev"; move it to reviewer.decision.',
+    throw invalidOptions(
+      'reviewer.jev is only read with the deprecated reviewer.backend "jev"; move it to reviewer.decision.',
     );
   }
   const prefix =
     reviewer?.decisionModel === undefined ? "reviewer.decision" : "reviewer.decisionModel";
   const value = reviewer?.decision ?? reviewer?.decisionModel;
   if (value === undefined) {
-    throw new Error(
-      'Invalid auto-approval plugin options: the decision backend needs reviewer.decision with a provider ("typesafe" or "cloudflare").',
+    throw invalidOptions(
+      'the decision backend needs reviewer.decision with a provider ("typesafe" or "cloudflare").',
     );
   }
   const options = parseOptions({ schema: decisionOptionsSchema, value, prefix });
@@ -709,8 +701,8 @@ function typeSafeConfiguration(input: {
   const envKey = nonEmpty(input.env.TYPESAFE_API_KEY?.trim());
   const optionBaseURL = nonEmpty(input.options.baseURL?.trim());
   if (optionKey === undefined && optionBaseURL !== undefined) {
-    throw new Error(
-      `Invalid auto-approval plugin options: ${input.prefix}.baseURL needs ${input.prefix}.apiKey next to it; with TYPESAFE_API_KEY use TYPESAFE_BASE_URL.`,
+    throw invalidOptions(
+      `${input.prefix}.baseURL needs ${input.prefix}.apiKey next to it; with TYPESAFE_API_KEY use TYPESAFE_BASE_URL.`,
     );
   }
   const source =
@@ -719,9 +711,7 @@ function typeSafeConfiguration(input: {
       : { apiKey: optionKey, baseURL: optionBaseURL };
   const apiKey = source.apiKey;
   if (apiKey === undefined) {
-    throw new Error(
-      `Invalid auto-approval plugin options: the typesafe provider needs ${input.prefix}.apiKey or TYPESAFE_API_KEY.`,
-    );
+    throw invalidOptions(`the typesafe provider needs ${input.prefix}.apiKey or TYPESAFE_API_KEY.`);
   }
   const minAllowProbability = input.options.minAllowProbability ?? defaultMinAllowProbability;
   const maxStateTokens = input.options.maxStateTokens ?? defaultMaxStateTokens.typesafe;
@@ -759,16 +749,16 @@ function longContextConfiguration(input: {
   const options = input.options === true ? {} : input.options;
   const maxStateTokens = options.maxStateTokens ?? defaultLongContextMaxStateTokens;
   if (maxStateTokens <= input.maxStateTokens) {
-    throw new Error(
-      `Invalid auto-approval plugin options: ${input.prefix}.longContext.maxStateTokens must be larger than ${input.prefix}.maxStateTokens.`,
+    throw invalidOptions(
+      `${input.prefix}.longContext.maxStateTokens must be larger than ${input.prefix}.maxStateTokens.`,
     );
   }
   const minAllowProbability =
     options.minAllowProbability ??
     Math.max(input.minAllowProbability, defaultLongContextMinAllowProbability);
   if (minAllowProbability < input.minAllowProbability) {
-    throw new Error(
-      `Invalid auto-approval plugin options: ${input.prefix}.longContext.minAllowProbability must not be below ${input.prefix}.minAllowProbability.`,
+    throw invalidOptions(
+      `${input.prefix}.longContext.minAllowProbability must not be below ${input.prefix}.minAllowProbability.`,
     );
   }
   return { maxStateTokens, minAllowProbability };
@@ -786,15 +776,15 @@ function cloudflareConfiguration(input: {
   prefix: string;
 }): DecisionConfiguration {
   if (input.options.longContext !== undefined && input.options.longContext !== false) {
-    throw new Error(
-      `Invalid auto-approval plugin options: ${input.prefix}.longContext is only available with the typesafe provider.`,
+    throw invalidOptions(
+      `${input.prefix}.longContext is only available with the typesafe provider.`,
     );
   }
   const apiKey =
     nonEmpty(input.options.apiKey?.trim()) ?? nonEmpty(input.env.CLOUDFLARE_API_TOKEN?.trim());
   if (apiKey === undefined) {
-    throw new Error(
-      `Invalid auto-approval plugin options: the cloudflare provider needs ${input.prefix}.apiKey or CLOUDFLARE_API_TOKEN.`,
+    throw invalidOptions(
+      `the cloudflare provider needs ${input.prefix}.apiKey or CLOUDFLARE_API_TOKEN.`,
     );
   }
   // Account IDs are hexadecimal; the dashboard shows them in lowercase.
@@ -802,19 +792,17 @@ function cloudflareConfiguration(input: {
     nonEmpty(input.options.accountId?.trim()) ?? nonEmpty(input.env.CLOUDFLARE_ACCOUNT_ID?.trim())
   )?.toLowerCase();
   if (accountID === undefined) {
-    throw new Error(
-      `Invalid auto-approval plugin options: the cloudflare provider needs ${input.prefix}.accountId or CLOUDFLARE_ACCOUNT_ID.`,
+    throw invalidOptions(
+      `the cloudflare provider needs ${input.prefix}.accountId or CLOUDFLARE_ACCOUNT_ID.`,
     );
   }
   if (!cloudflareAccountIDPattern.test(accountID)) {
-    throw new Error(
-      "Invalid auto-approval plugin options: the Cloudflare account ID must be 32 hexadecimal characters.",
-    );
+    throw invalidOptions("the Cloudflare account ID must be 32 hexadecimal characters.");
   }
   const model = input.options.model ?? defaultModels.cloudflare;
   if (!cloudflareModelPattern.test(model)) {
-    throw new Error(
-      "Invalid auto-approval plugin options: the Cloudflare model must be a Workers AI model name such as clef-flash.",
+    throw invalidOptions(
+      "the Cloudflare model must be a Workers AI model name such as clef-flash.",
     );
   }
   return {
@@ -849,9 +837,7 @@ const vendorChatAPIs = {
  */
 function chatConfiguration(input: { options: unknown; env: Environment }): ChatConfiguration {
   if (input.options === undefined) {
-    throw new Error(
-      "Invalid auto-approval plugin options: the chat reviewer needs reviewer.chat with a model.",
-    );
+    throw invalidOptions("the chat reviewer needs reviewer.chat with a model.");
   }
   const options = parseOptions({
     schema: chatOptionsSchema,
@@ -865,8 +851,8 @@ function chatConfiguration(input: { options: unknown; env: Environment }): ChatC
   const optionKey = nonEmpty(options.apiKey?.trim());
   const optionBaseURL = nonEmpty(options.baseURL?.trim());
   if (optionKey === undefined && optionBaseURL !== undefined) {
-    throw new Error(
-      "Invalid auto-approval plugin options: reviewer.chat.baseURL needs reviewer.chat.apiKey next to it; with AUTO_APPROVAL_CHAT_API_KEY use AUTO_APPROVAL_CHAT_BASE_URL.",
+    throw invalidOptions(
+      "reviewer.chat.baseURL needs reviewer.chat.apiKey next to it; with AUTO_APPROVAL_CHAT_API_KEY use AUTO_APPROVAL_CHAT_BASE_URL.",
     );
   }
   const source =
@@ -877,8 +863,8 @@ function chatConfiguration(input: { options: unknown; env: Environment }): ChatC
         }
       : { apiKey: optionKey, baseURL: optionBaseURL };
   if (source.apiKey === undefined) {
-    throw new Error(
-      "Invalid auto-approval plugin options: the chat reviewer needs reviewer.chat.apiKey or AUTO_APPROVAL_CHAT_API_KEY.",
+    throw invalidOptions(
+      "the chat reviewer needs reviewer.chat.apiKey or AUTO_APPROVAL_CHAT_API_KEY.",
     );
   }
   return {
@@ -898,14 +884,14 @@ function vendorChatConfiguration(input: {
   const { endpoint, keyVariable } = vendorChatAPIs[input.provider];
   // Blank counts as unset, as for openai-compatible: `{env:NAME}` of an unset variable is "".
   if (nonEmpty(input.options.baseURL?.trim()) !== undefined) {
-    throw new Error(
-      `Invalid auto-approval plugin options: reviewer.chat.baseURL is not used with the ${input.provider} provider; use provider "openai-compatible" for another endpoint.`,
+    throw invalidOptions(
+      `reviewer.chat.baseURL is not used with the ${input.provider} provider; use provider "openai-compatible" for another endpoint.`,
     );
   }
   const apiKey = nonEmpty(input.options.apiKey?.trim()) ?? nonEmpty(input.env[keyVariable]?.trim());
   if (apiKey === undefined) {
-    throw new Error(
-      `Invalid auto-approval plugin options: the ${input.provider} provider needs reviewer.chat.apiKey or ${keyVariable}.`,
+    throw invalidOptions(
+      `the ${input.provider} provider needs reviewer.chat.apiKey or ${keyVariable}.`,
     );
   }
   return {
@@ -926,17 +912,13 @@ function chatEndpoint(baseURL: string): string {
   try {
     url = new URL(baseURL);
   } catch {
-    throw new Error("Invalid auto-approval plugin options: the chat base URL is not a valid URL.");
+    throw invalidOptions("the chat base URL is not a valid URL.");
   }
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopbackHosts.has(url.hostname))) {
-    throw new Error(
-      "Invalid auto-approval plugin options: the chat base URL must use HTTPS (HTTP only on a loopback host).",
-    );
+    throw invalidOptions("the chat base URL must use HTTPS (HTTP only on a loopback host).");
   }
   if (url.username || url.password || url.search || url.hash) {
-    throw new Error(
-      "Invalid auto-approval plugin options: the chat base URL must not carry credentials, a query or a fragment.",
-    );
+    throw invalidOptions("the chat base URL must not carry credentials, a query or a fragment.");
   }
   return `${url.origin}${url.pathname.replace(/\/+$/, "")}/chat/completions`;
 }
@@ -951,36 +933,33 @@ function typeSafeEndpoint(baseURL: string): string {
   try {
     url = new URL(baseURL);
   } catch {
-    throw new Error(
-      "Invalid auto-approval plugin options: the TypeSafe base URL is not a valid URL.",
-    );
+    throw invalidOptions("the TypeSafe base URL is not a valid URL.");
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error(
-      "Invalid auto-approval plugin options: the TypeSafe base URL must use HTTP(S).",
-    );
+    throw invalidOptions("the TypeSafe base URL must use HTTP(S).");
   }
   // The bearer token must not cross the network in the clear.
   if (url.protocol === "http:" && !loopbackHosts.has(url.hostname)) {
-    throw new Error(
-      "Invalid auto-approval plugin options: the TypeSafe base URL must use HTTPS except on a loopback host.",
-    );
+    throw invalidOptions("the TypeSafe base URL must use HTTPS except on a loopback host.");
   }
   if (url.username || url.password || url.search || url.hash || url.pathname !== "/") {
-    throw new Error(
-      "Invalid auto-approval plugin options: the TypeSafe base URL must be an origin without credentials, path, query or fragment.",
+    throw invalidOptions(
+      "the TypeSafe base URL must be an origin without credentials, path, query or fragment.",
     );
   }
   return new URL("/v1/systemone", url).href;
+}
+
+/** The error for plugin options that cannot start the plugin; every such message shares one prefix. */
+export function invalidOptions(detail: string): Error {
+  return new Error(`Invalid auto-approval plugin options: ${detail}`);
 }
 
 /** Parses a nested options object, naming where it sits in the plugin options. */
 function parseOptions<T>(input: { schema: z.ZodMiniType<T>; value: unknown; prefix: string }): T {
   const result = z.safeParse(input.schema, input.value);
   if (!result.success) {
-    throw new Error(
-      `Invalid auto-approval plugin options: ${input.prefix}: ${result.error.message}`,
-    );
+    throw invalidOptions(`${input.prefix}: ${result.error.message}`);
   }
   return result.data;
 }
