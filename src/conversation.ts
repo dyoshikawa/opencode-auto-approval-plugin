@@ -124,7 +124,7 @@ function humanTurn(input: {
 /**
  * OpenCode's question tool stores answers in state.metadata.answers.
  * Confirmed against the official question tool, question schema and client
- * SessionMessageAssistantTool type (anomalyco/opencode).
+ * SessionMessageAssistantTool type (OpenCode upstream).
  */
 const MAX_QUESTION_TURN_CHARS = 2_500;
 const MAX_QUESTION_TEXT_CHARS = 500;
@@ -162,8 +162,7 @@ function questionPair(question: unknown, answer: unknown): QuestionPair | undefi
     answer.length === 0 ||
     answer.length > MAX_SELECTED_ANSWERS ||
     answer.some(
-      (value) =>
-        typeof value !== "string" || !value.trim() || value.length > MAX_ANSWER_TEXT_CHARS,
+      (value) => typeof value !== "string" || !value.trim() || value.length > MAX_ANSWER_TEXT_CHARS,
     )
   )
     return undefined;

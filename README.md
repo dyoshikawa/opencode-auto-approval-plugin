@@ -791,7 +791,7 @@ This provides context for review, **not automatic permission**, and requires
 `conversation.enabled: true`. OpenCode V1 parsing is unchanged.
 
 The V2 fields are supported by OpenCode's own
-[question tool implementation](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/opencode/src/tool/question.ts),
+[question-answer rendering](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/tui/src/routes/session/index.tsx),
 [question answer schema](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/schema/src/question.ts),
 and [V2 assistant tool-part type](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/client/src/promise/generated/types.ts).
 No `AGENTS.md` files are automatically loaded into the payload; configured
