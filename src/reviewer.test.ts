@@ -5,11 +5,13 @@ import {
   estimateTokens,
   OversizeError,
   parseVerdict,
+  recordedReview,
   type ReviewRequest,
   reviewerPrompt,
   userInstructionsPreamble,
   userPolicyPreamble,
 } from "./reviewer.js";
+import type { UsageRecord } from "./usage.js";
 
 const request: ReviewRequest = {
   source: "permission-request",
@@ -263,5 +265,86 @@ describe("assertReadWhole", () => {
     expect(() =>
       assertReadWhole({ model: "m", prompt: "x".repeat(1_000), reportedTokens: null }),
     ).not.toThrow();
+  });
+});
+
+const usage = () => ({
+  provider: "chat",
+  model: "m",
+  project: "p",
+  inputTokens: 10,
+  outputTokens: 2,
+  costUSD: null,
+});
+
+describe("recordedReview", () => {
+  it("records a verdict with the usage read after the review", async () => {
+    const records: UsageRecord[] = [];
+    const tokens = { input: null as number | null };
+    const decision = await recordedReview({
+      recordUsage: (record) => records.push(record),
+      review: async () => {
+        tokens.input = 42;
+        return { verdict: "allow", reason: "ok" };
+      },
+      usage: () => ({ ...usage(), inputTokens: tokens.input }),
+    });
+    expect(decision).toEqual({ verdict: "allow", reason: "ok" });
+    expect(records).toEqual([
+      {
+        v: 1,
+        time: expect.any(String),
+        provider: "chat",
+        model: "m",
+        project: "p",
+        inputTokens: 42,
+        outputTokens: 2,
+        latencyMs: expect.any(Number),
+        verdict: "allow",
+        costUSD: null,
+      },
+    ]);
+  });
+
+  it("records an oversize refusal and any other failure, then rethrows", async () => {
+    const records: UsageRecord[] = [];
+    const recordUsage = (record: UsageRecord) => records.push(record);
+    await expect(
+      recordedReview({
+        recordUsage,
+        review: () => Promise.reject(new OversizeError("too large")),
+        usage,
+      }),
+    ).rejects.toThrow("too large");
+    await expect(
+      recordedReview({ recordUsage, review: () => Promise.reject(new Error("boom")), usage }),
+    ).rejects.toThrow("boom");
+    expect(records.map((record) => record.verdict)).toEqual(["oversize", "error"]);
+  });
+
+  it("never lets the usage log decide a review", async () => {
+    const decision = await recordedReview({
+      recordUsage: () => {
+        throw new Error("disk full");
+      },
+      review: async () => ({ verdict: "deny", reason: "no" }),
+      usage: () => {
+        throw new Error("unreadable");
+      },
+    });
+    expect(decision.verdict).toBe("deny");
+  });
+
+  it("reads no usage without a recorder", async () => {
+    let read = false;
+    await recordedReview({
+      recordUsage: undefined,
+      review: async () => ({ verdict: "escalate", reason: "?" }),
+      usage: () => {
+        read = true;
+        return usage();
+      },
+    });
+    expect(read).toBe(false);
   });
 });

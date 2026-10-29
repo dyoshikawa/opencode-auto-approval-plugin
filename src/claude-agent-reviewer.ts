@@ -3,8 +3,8 @@ import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { agentReviewPrompt } from "./agent-reviewer.js";
 import type { PluginConfiguration } from "./config.js";
 import {
-  OversizeError,
   parseVerdict,
+  recordedReview,
   type Reviewer,
   type ReviewRequest,
   type ReviewVerdict,
@@ -67,21 +67,18 @@ export class ClaudeAgentReviewer implements Reviewer {
     return false;
   }
 
-  async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const startedAt = Date.now();
+  review(input: ReviewRequest): Promise<ReviewVerdict> {
     const usage: Usage = { inputTokens: null, outputTokens: null, costUSD: null };
-    try {
-      const decision = await this.#review({ request: input, usage });
-      this.#record({ startedAt, usage, verdict: decision.verdict });
-      return decision;
-    } catch (error) {
-      this.#record({
-        startedAt,
-        usage,
-        verdict: error instanceof OversizeError ? "oversize" : "error",
-      });
-      throw error;
-    }
+    return recordedReview({
+      recordUsage: this.#recordUsage,
+      review: () => this.#review({ request: input, usage }),
+      usage: () => ({
+        provider: "claude-agent-sdk",
+        model: this.#model ?? "default",
+        project: this.#project,
+        ...usage,
+      }),
+    });
   }
 
   async #review(input: { request: ReviewRequest; usage: Usage }): Promise<ReviewVerdict> {
@@ -155,30 +152,6 @@ export class ClaudeAgentReviewer implements Reviewer {
       throw error;
     });
     return this.#query;
-  }
-
-  #record(input: {
-    startedAt: number;
-    usage: Usage;
-    verdict: ReviewVerdict["verdict"] | "error" | "oversize";
-  }): void {
-    if (this.#recordUsage === undefined) return;
-    try {
-      this.#recordUsage({
-        v: 1,
-        time: new Date(input.startedAt).toISOString(),
-        provider: "claude-agent-sdk",
-        model: this.#model ?? "default",
-        project: this.#project,
-        inputTokens: input.usage.inputTokens,
-        outputTokens: input.usage.outputTokens,
-        latencyMs: Math.max(0, Date.now() - input.startedAt),
-        verdict: input.verdict,
-        costUSD: input.usage.costUSD,
-      });
-    } catch {
-      // The usage log must never decide a review.
-    }
   }
 }
 

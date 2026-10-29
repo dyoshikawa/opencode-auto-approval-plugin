@@ -6,8 +6,8 @@ import type { CodexOptions, RunResult, ThreadOptions, TurnOptions } from "@opena
 import { agentReviewPrompt } from "./agent-reviewer.js";
 import type { PluginConfiguration } from "./config.js";
 import {
-  OversizeError,
   parseVerdict,
+  recordedReview,
   type Reviewer,
   type ReviewRequest,
   type ReviewVerdict,
@@ -77,21 +77,20 @@ export class CodexReviewer implements Reviewer {
     return false;
   }
 
-  async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    const startedAt = Date.now();
+  review(input: ReviewRequest): Promise<ReviewVerdict> {
     const usage: Usage = { inputTokens: null, outputTokens: null };
-    try {
-      const decision = await this.#review({ request: input, usage });
-      this.#record({ startedAt, usage, verdict: decision.verdict });
-      return decision;
-    } catch (error) {
-      this.#record({
-        startedAt,
-        usage,
-        verdict: error instanceof OversizeError ? "oversize" : "error",
-      });
-      throw error;
-    }
+    return recordedReview({
+      recordUsage: this.#recordUsage,
+      review: () => this.#review({ request: input, usage }),
+      usage: () => ({
+        provider: "codex-sdk",
+        model: this.#model ?? "default",
+        project: this.#project,
+        ...usage,
+        // Codex reports no price, and a ChatGPT sign-in has none per call.
+        costUSD: null,
+      }),
+    });
   }
 
   async #review(input: { request: ReviewRequest; usage: Usage }): Promise<ReviewVerdict> {
@@ -149,31 +148,6 @@ export class CodexReviewer implements Reviewer {
       throw error;
     });
     return this.#codex;
-  }
-
-  #record(input: {
-    startedAt: number;
-    usage: Usage;
-    verdict: ReviewVerdict["verdict"] | "error" | "oversize";
-  }): void {
-    if (this.#recordUsage === undefined) return;
-    try {
-      this.#recordUsage({
-        v: 1,
-        time: new Date(input.startedAt).toISOString(),
-        provider: "codex-sdk",
-        model: this.#model ?? "default",
-        project: this.#project,
-        inputTokens: input.usage.inputTokens,
-        outputTokens: input.usage.outputTokens,
-        latencyMs: Math.max(0, Date.now() - input.startedAt),
-        verdict: input.verdict,
-        // Codex reports no price, and a ChatGPT sign-in has none per call.
-        costUSD: null,
-      });
-    } catch {
-      // The usage log must never decide a review.
-    }
   }
 }
 

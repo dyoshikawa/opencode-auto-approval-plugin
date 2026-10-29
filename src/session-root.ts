@@ -1,6 +1,7 @@
 import * as z from "zod/mini";
 
-import { HISTORY_TIMEOUT_MS, withTimeout } from "./conversation.js";
+import { HISTORY_TIMEOUT_MS } from "./conversation.js";
+import { withTimeout } from "./shared.js";
 
 /** Subagents nest a few levels at most; a longer chain is treated as unknown. */
 export const MAX_SESSION_DEPTH = 8;

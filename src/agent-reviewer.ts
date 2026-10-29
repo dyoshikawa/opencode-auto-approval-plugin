@@ -9,6 +9,7 @@ import {
   reviewCheck,
   reviewerPrompt,
 } from "./reviewer.js";
+import { withTimeout } from "./shared.js";
 
 export const reviewerAgentName = "auto-approval-reviewer";
 
@@ -50,8 +51,9 @@ export class AgentReviewer implements Reviewer {
 
     try {
       const response = await withTimeout({
-        operation: this.#client.prompt({ sessionID, text }),
-        timeoutMs: this.#configuration.reviewer.timeoutMs,
+        promise: this.#client.prompt({ sessionID, text }),
+        ms: this.#configuration.reviewer.timeoutMs,
+        message: "Reviewer timed out.",
       });
       return parseVerdict(response, check);
     } catch (error) {
@@ -94,18 +96,4 @@ export function agentReviewPrompt(input: {
     );
   }
   return { text, check };
-}
-
-async function withTimeout<T>(input: { operation: Promise<T>; timeoutMs: number }): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      input.operation,
-      new Promise<T>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error("Reviewer timed out.")), input.timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
 }

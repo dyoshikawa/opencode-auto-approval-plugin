@@ -2,13 +2,13 @@ import { constants } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { PluginConfiguration } from "./config.js";
+import { type PluginConfiguration, reviewerApiKeys } from "./config.js";
 import { redactSecrets } from "./redaction.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import { isRecord } from "./shared.js";
 
 export const MAX_COMMAND_INPUT_BYTES = 65_536;
-export const MAX_COMMAND_LENGTH = 2_048;
+const MAX_COMMAND_LENGTH = 2_048;
 export const MAX_AUDIT_QUEUE_SIZE = 1_000;
 
 export type AuditLogEntry = {
@@ -68,10 +68,7 @@ function commandForAudit(input: {
     if (isRecord(resource) && typeof resource.command === "string") {
       const redacted = redactCommand({
         command: resource.command,
-        apiKeys: [
-          configuration.reviewer.decision?.apiKey,
-          configuration.reviewer.chat?.apiKey,
-        ].filter((apiKey) => apiKey !== undefined),
+        apiKeys: reviewerApiKeys(configuration),
       });
       return { command: redacted.command, commandTruncated: redacted.truncated };
     }

@@ -1,10 +1,10 @@
 import type { PluginConfiguration } from "./config.js";
-import { isRecord, textFromParts } from "./shared.js";
+import { isRecord, textFromParts, withTimeout } from "./shared.js";
 
 export const HISTORY_TIMEOUT_MS = 1_000;
 export const HISTORY_MESSAGE_LIMIT = 32;
 export const MAX_CONVERSATION_TURNS = 8;
-export const MAX_CONVERSATION_CHARACTERS = 12_000;
+const MAX_CONVERSATION_CHARACTERS = 12_000;
 
 export type ConversationTurn = { role: "user" | "assistant"; text: string };
 export type ConversationContext = {
@@ -108,25 +108,6 @@ function humanTurn(input: {
         ? textFromParts({ parts: input.parts, skipSyntheticOrIgnored: true })
         : "";
   return text.trim() || role === "user" ? { role, text } : undefined;
-}
-
-/** Stop waiting for `promise` after `ms`; the underlying work is not cancelled. */
-export async function withTimeout<T>(input: {
-  promise: Promise<T>;
-  ms: number;
-  message: string;
-}): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      input.promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(input.message)), input.ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 /** No cache: re-read the host and reconcile the live prompt before every review. */
