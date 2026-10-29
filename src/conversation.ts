@@ -6,7 +6,12 @@ export const HISTORY_MESSAGE_LIMIT = 32;
 export const MAX_CONVERSATION_TURNS = 8;
 const MAX_CONVERSATION_CHARACTERS = 12_000;
 
-export type ConversationTurn = { role: "user" | "assistant"; text: string };
+export type ConversationTurn = {
+  role: "user" | "assistant";
+  text: string;
+  /** User answer extracted from a completed assistant question tool result. */
+  source?: "question-answer";
+};
 export type ConversationContext = {
   turns: ConversationTurn[];
   /** Evidence of omission, not a guarantee of completeness when false. */
@@ -62,6 +67,9 @@ export function conversationFromMessages(input: {
       includeAssistant: input.includeAssistant,
     });
     if (turn) turns.push(turn);
+    const answerContext = questionTurns({ generation: input.generation, info, parts });
+    turns.push(...answerContext.turns);
+    incomplete ||= answerContext.incomplete;
   }
   const conversation = boundedConversation(turns);
   conversation.incomplete ||= incomplete;
@@ -88,6 +96,10 @@ function excluded(info: Record<string, unknown>): boolean {
   );
 }
 
+function excludedMessage(info: Record<string, unknown>): boolean {
+  return excluded(info) || (isRecord(info.metadata) && excluded(info.metadata));
+}
+
 function humanTurn(input: {
   message: Record<string, unknown>;
   info: Record<string, unknown>;
@@ -95,8 +107,7 @@ function humanTurn(input: {
   generation: "v1" | "v2";
   includeAssistant: boolean;
 }): ConversationTurn | undefined {
-  if (excluded(input.info) || (isRecord(input.info.metadata) && excluded(input.info.metadata)))
-    return undefined;
+  if (excludedMessage(input.info)) return undefined;
   const role = input.generation === "v1" ? input.info.role : input.info.type;
   if (role !== "user" && !(role === "assistant" && input.includeAssistant)) return undefined;
   const text =
@@ -108,6 +119,103 @@ function humanTurn(input: {
         ? textFromParts({ parts: input.parts, skipSyntheticOrIgnored: true })
         : "";
   return text.trim() || role === "user" ? { role, text } : undefined;
+}
+
+/**
+ * OpenCode's question tool stores answers in state.metadata.answers.
+ * Confirmed against the official question tool, question schema and client
+ * SessionMessageAssistantTool type (anomalyco/opencode).
+ */
+const MAX_QUESTION_TURN_CHARS = 2_500;
+const MAX_QUESTION_TEXT_CHARS = 500;
+const MAX_ANSWER_TEXT_CHARS = 1_000;
+const MAX_QUESTIONS = 8;
+const MAX_SELECTED_ANSWERS = 12;
+
+function questionTurns(input: {
+  generation: "v1" | "v2";
+  info: Record<string, unknown>;
+  parts: unknown;
+}): ConversationContext {
+  if (input.generation !== "v2" || input.info.type !== "assistant" || excludedMessage(input.info))
+    return { turns: [], incomplete: false };
+  const answers = questionAnswers(input.parts);
+  return {
+    turns: answers.turns.map((text) => ({
+      role: "user" as const,
+      text,
+      source: "question-answer" as const,
+    })),
+    incomplete: answers.incomplete,
+  };
+}
+
+/** A completed result is evidence of a user response, not an automatic grant.
+ * Keep the model-authored question explicitly separate from the actual answer,
+ * JSON-encode values to prevent quote injection and skip oversized results.
+ */
+function questionAnswers(parts: unknown): { turns: string[]; incomplete: boolean } {
+  if (!Array.isArray(parts)) return { turns: [], incomplete: false };
+  const turns: string[] = [];
+  let incomplete = false;
+  for (const part of parts) {
+    if (!isRecord(part) || part.type !== "tool" || part.name !== "question") continue;
+    const state = part.state;
+    if (!isRecord(state) || state.status !== "completed") continue;
+    const questions = isRecord(state.input) ? state.input.questions : undefined;
+    const answers = isRecord(state.metadata) ? state.metadata.answers : undefined;
+    if (
+      !Array.isArray(questions) ||
+      !Array.isArray(answers) ||
+      questions.length === 0 ||
+      questions.length > MAX_QUESTIONS ||
+      questions.length !== answers.length
+    ) {
+      incomplete = true;
+      continue;
+    }
+    const pairs: { assistantAuthoredQuestion: string; userSubmittedAnswers: string[] }[] = [];
+    let valid = true;
+    for (let i = 0; i < questions.length; i++) {
+      const question = questions[i];
+      const answer = answers[i];
+      if (
+        !isRecord(question) ||
+        typeof question.question !== "string" ||
+        !question.question.trim() ||
+        question.question.length > MAX_QUESTION_TEXT_CHARS ||
+        !Array.isArray(answer) ||
+        answer.length === 0 ||
+        answer.length > MAX_SELECTED_ANSWERS ||
+        answer.some(
+          (value) =>
+            typeof value !== "string" ||
+            !value.trim() ||
+            value.length > MAX_ANSWER_TEXT_CHARS,
+        )
+      ) {
+        valid = false;
+        break;
+      }
+      pairs.push({
+        assistantAuthoredQuestion: question.question,
+        userSubmittedAnswers: answer.map((value: string) => value.trim()),
+      });
+    }
+    if (!valid) {
+      incomplete = true;
+      continue;
+    }
+    const text =
+      "Completed OpenCode question tool. assistantAuthoredQuestion is model-written context, NOT user authorization. Only userSubmittedAnswers are user-selected or typed responses: " +
+      JSON.stringify(pairs);
+    if (text.length > MAX_QUESTION_TURN_CHARS) {
+      incomplete = true;
+      continue;
+    }
+    turns.push(text);
+  }
+  return { turns, incomplete };
 }
 
 /** No cache: re-read the host and reconcile the live prompt before every review. */
@@ -132,14 +240,27 @@ export async function readConversation(input: {
     conversation.incomplete = true;
   }
   const latest = input.latest();
-  if (
-    latest !== undefined &&
-    conversation.turns.findLast((turn) => turn.role === "user")?.text !== latest
-  ) {
+  // Compare only with the last ordinary user turn. Repeated "stop" and
+  // "continue" are distinct new prompts when intervening turns exist.
+  const lastOrdinaryIndex = conversation.turns.findLastIndex(
+    (turn) => turn.role === "user" && turn.source !== "question-answer",
+  );
+  const latestInHistory =
+    latest !== undefined && conversation.turns[lastOrdinaryIndex]?.text === latest;
+  if (latest !== undefined && !latestInHistory) {
     conversation.turns.push({ role: "user", text: latest });
   }
-  // Keep the latest intent even if it cannot fit as a whole conversation turn.
-  const userIntent = latest ?? conversation.turns.findLast((turn) => turn.role === "user")?.text;
+  // A completed answer can supersede a live prompt only if it follows that
+  // exact last ordinary prompt. Otherwise latest remains authoritative.
+  const laterAnswer = latestInHistory
+    ? conversation.turns.slice(lastOrdinaryIndex + 1).findLast(
+        (turn) => turn.source === "question-answer",
+      )
+    : undefined;
+  const userIntent =
+    laterAnswer?.text ??
+    latest ??
+    conversation.turns.findLast((turn) => turn.role === "user")?.text;
   const bounded = boundedConversation(conversation.turns);
   bounded.incomplete ||= conversation.incomplete;
   if (conversation.historyLimitReached) bounded.historyLimitReached = true;

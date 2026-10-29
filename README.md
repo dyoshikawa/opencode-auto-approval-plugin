@@ -776,9 +776,26 @@ the plugin's `options` object (the second tuple item under `plugin` on OpenCode 
 Enabled, each review reads the current session's available history, retaining at most **8 whole turns / 12,000 characters**. Only user turns are included by
 default, so a short request such as "continue" can refer to an earlier user instruction without
 letting assistant prose establish consent. `conversation.includeAssistant: true` also sends
-assistant text as untrusted context, never as authorization. Tool output, synthetic/ignored parts,
-reviewer messages and compaction summaries are excluded. No `AGENTS.md` files are automatically
-loaded into the payload; configured `reviewer.instructions` still apply to every backend.
+assistant text as untrusted context, never as authorization. Ordinary tool output, synthetic/ignored
+parts, reviewer messages and compaction summaries are excluded.
+
+On OpenCode V2 only, completed `question` tool results supply structured user responses from
+`state.metadata.answers` even when `includeAssistant` is false. The assistant-authored question
+is explicitly labeled **not user authorization**; both the question and selected/custom answers
+are JSON-encoded, and only the actual answers count as user responses. Multiple questions and
+multiple selections are preserved together. An oversized or malformed completed response is
+omitted and marks the conversation incomplete; running, cancelled and unrelated tool calls
+cannot establish consent. Normal live user prompts remain authoritative, including repeated
+revocations, unless a completed question response occurred after the latest ordinary prompt.
+This provides context for review, **not automatic permission**, and requires
+`conversation.enabled: true`. OpenCode V1 parsing is unchanged.
+
+The V2 fields are supported by OpenCode's own
+[question tool implementation](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/opencode/src/tool/question.ts),
+[question answer schema](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/schema/src/question.ts),
+and [V2 assistant tool-part type](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/client/src/promise/generated/types.ts).
+No `AGENTS.md` files are automatically loaded into the payload; configured
+`reviewer.instructions` still apply to every backend.
 
 History reads can add up to **1 second** (`HISTORY_TIMEOUT_MS`) before each review, including every
 tool call in `all-tools` mode. V1 requests at most **32 host messages** (`HISTORY_MESSAGE_LIMIT`);
