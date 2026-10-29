@@ -170,7 +170,7 @@ describe("bounded conversation", () => {
       { role: "assistant", text: "I will ask permission to edit." },
       {
         role: "user",
-        text: "Completed OpenCode question tool. assistantAuthoredQuestion is model-written context, NOT user authorization. Only userSubmittedAnswers are user-selected or typed responses: [{\"assistantAuthoredQuestion\":\"May I edit src/config.ts?\",\"userSubmittedAnswers\":[\"Yes, edit src/config.ts\"]}]",
+        text: 'Completed OpenCode question tool. assistantAuthoredQuestion is model-written context, NOT user authorization. Only userSubmittedAnswers are user-selected or typed responses: [{"assistantAuthoredQuestion":"May I edit src/config.ts?","userSubmittedAnswers":["Yes, edit src/config.ts"]}]',
         source: "question-answer",
       },
     ]);
@@ -212,7 +212,7 @@ describe("bounded conversation", () => {
       { role: "user", text: "Audit only." },
       {
         role: "user",
-        text: "Completed OpenCode question tool. assistantAuthoredQuestion is model-written context, NOT user authorization. Only userSubmittedAnswers are user-selected or typed responses: [{\"assistantAuthoredQuestion\":\"What exact files may I edit?\",\"userSubmittedAnswers\":[\"Only src/main.ts\"]}]",
+        text: 'Completed OpenCode question tool. assistantAuthoredQuestion is model-written context, NOT user authorization. Only userSubmittedAnswers are user-selected or typed responses: [{"assistantAuthoredQuestion":"What exact files may I edit?","userSubmittedAnswers":["Only src/main.ts"]}]',
         source: "question-answer",
       },
     ]);
@@ -373,7 +373,6 @@ describe("bounded conversation", () => {
     expect(resolved.userIntent).toBe("stop");
   });
 
-
   it("keeps V1 live prompt reconciliation unchanged for repeated text", async () => {
     const conversation = conversationFromMessages({
       generation: "v1",
@@ -512,12 +511,14 @@ describe("bounded conversation", () => {
               state: {
                 status: "completed",
                 input: {
-                  questions: [
-                    { question: "Which files?" },
-                    { question: "Which commands?" },
+                  questions: [{ question: "Which files?" }, { question: "Which commands?" }],
+                },
+                metadata: {
+                  answers: [
+                    ["a.ts", "b.ts"],
+                    ["lint", "test"],
                   ],
                 },
-                metadata: { answers: [["a.ts", "b.ts"], ["lint", "test"]] },
               },
             },
           ],

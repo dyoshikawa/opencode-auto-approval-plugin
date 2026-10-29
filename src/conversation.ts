@@ -150,6 +150,29 @@ function questionTurns(input: {
   };
 }
 
+type QuestionPair = { assistantAuthoredQuestion: string; userSubmittedAnswers: string[] };
+
+function questionPair(question: unknown, answer: unknown): QuestionPair | undefined {
+  if (
+    !isRecord(question) ||
+    typeof question.question !== "string" ||
+    !question.question.trim() ||
+    question.question.length > MAX_QUESTION_TEXT_CHARS ||
+    !Array.isArray(answer) ||
+    answer.length === 0 ||
+    answer.length > MAX_SELECTED_ANSWERS ||
+    answer.some(
+      (value) =>
+        typeof value !== "string" || !value.trim() || value.length > MAX_ANSWER_TEXT_CHARS,
+    )
+  )
+    return undefined;
+  return {
+    assistantAuthoredQuestion: question.question,
+    userSubmittedAnswers: answer.map((value: string) => value.trim()),
+  };
+}
+
 /** A completed result is evidence of a user response, not an automatic grant.
  * Keep the model-authored question explicitly separate from the actual answer,
  * JSON-encode values to prevent quote injection and skip oversized results.
@@ -174,33 +197,15 @@ function questionAnswers(parts: unknown): { turns: string[]; incomplete: boolean
       incomplete = true;
       continue;
     }
-    const pairs: { assistantAuthoredQuestion: string; userSubmittedAnswers: string[] }[] = [];
+    const pairs: QuestionPair[] = [];
     let valid = true;
     for (let i = 0; i < questions.length; i++) {
-      const question = questions[i];
-      const answer = answers[i];
-      if (
-        !isRecord(question) ||
-        typeof question.question !== "string" ||
-        !question.question.trim() ||
-        question.question.length > MAX_QUESTION_TEXT_CHARS ||
-        !Array.isArray(answer) ||
-        answer.length === 0 ||
-        answer.length > MAX_SELECTED_ANSWERS ||
-        answer.some(
-          (value) =>
-            typeof value !== "string" ||
-            !value.trim() ||
-            value.length > MAX_ANSWER_TEXT_CHARS,
-        )
-      ) {
+      const pair = questionPair(questions[i], answers[i]);
+      if (!pair) {
         valid = false;
         break;
       }
-      pairs.push({
-        assistantAuthoredQuestion: question.question,
-        userSubmittedAnswers: answer.map((value: string) => value.trim()),
-      });
+      pairs.push(pair);
     }
     if (!valid) {
       incomplete = true;
@@ -253,9 +258,9 @@ export async function readConversation(input: {
   // A completed answer can supersede a live prompt only if it follows that
   // exact last ordinary prompt. Otherwise latest remains authoritative.
   const laterAnswer = latestInHistory
-    ? conversation.turns.slice(lastOrdinaryIndex + 1).findLast(
-        (turn) => turn.source === "question-answer",
-      )
+    ? conversation.turns
+        .slice(lastOrdinaryIndex + 1)
+        .findLast((turn) => turn.source === "question-answer")
     : undefined;
   const userIntent =
     laterAnswer?.text ??
