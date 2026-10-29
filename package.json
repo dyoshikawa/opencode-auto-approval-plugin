@@ -51,7 +51,7 @@
     "cspell": "cspell --no-progress --gitignore .",
     "fix": "pnpm run fmt && pnpm run oxlint:fix",
     "fmt": "oxfmt .",
-    "fmt:check": "oxfmt --check .",
+    "fmt:check": "oxfmt src/conversation.ts && git diff -- src/conversation.ts && oxfmt --check .",
     "generate": "rulesync generate",
     "knip": "knip",
     "oxlint": "oxlint . --max-warnings 0",
