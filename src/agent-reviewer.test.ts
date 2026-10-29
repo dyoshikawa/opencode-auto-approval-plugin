@@ -74,13 +74,13 @@ describe("reviewer-only permission boundaries", () => {
         source: "tool-call",
         sessionID: "main-session",
         action: "task",
-        resource: { subagent: "consultor", prompt: "Inspect only" },
-        userIntent: "Ask consultor to inspect the project.",
+        resource: { subagent: "inspector", prompt: "Inspect only" },
+        userIntent: "Ask inspector to inspect the project.",
       });
 
       expect(decision.verdict).toBe(verdict);
       expect(client.prompts[0]?.text).toContain('"action":"task"');
-      expect(client.prompts[0]?.text).toContain("Ask consultor to inspect the project.");
+      expect(client.prompts[0]?.text).toContain("Ask inspector to inspect the project.");
     },
   );
 });
