@@ -279,9 +279,8 @@ export async function readConversation(input: {
   // created by the model or the model-authored labels the user selected.
   const userIntent =
     latest ??
-    conversation.turns.findLast(
-      (turn) => turn.role === "user" && turn.source !== "question-answer",
-    )?.text;
+    conversation.turns.findLast((turn) => turn.role === "user" && turn.source !== "question-answer")
+      ?.text;
   const bounded = boundedConversation(conversation.turns);
   bounded.incomplete ||= conversation.incomplete;
   if (conversation.historyLimitReached) bounded.historyLimitReached = true;
