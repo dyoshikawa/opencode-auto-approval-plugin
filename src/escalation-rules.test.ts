@@ -360,6 +360,30 @@ describe("EscalationRulesReviewer", () => {
     );
   });
 
+  it("reads patch headers as loosely as a host might", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "*", resource: "*.env" }],
+    });
+    for (const header of [
+      "*** Add File:.env",
+      "*** Update File:\t.env",
+      "***Update File: .env",
+      "*** Update File : .env",
+      "*** Update File: .env:x",
+      "*** Move to:.env",
+    ]) {
+      const patchText = `*** Begin Patch\n${header}\n@@\n*** End Patch`;
+      expect((await reviewer.review(toolCall("apply_patch", { patchText }))).verdict, header).toBe(
+        "escalate",
+      );
+    }
+    const other = "*** Begin Patch\n*** Update File:src/a.ts\n@@\n*** End Patch";
+    expect((await reviewer.review(toolCall("apply_patch", { patchText: other }))).verdict).toBe(
+      "allow",
+    );
+  });
+
   it("checks a large write quickly and escalates one too large to check", async () => {
     const rules = Array.from({ length: 200 }, (_, index) => ({
       action: "*",
