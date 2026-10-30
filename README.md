@@ -779,15 +779,21 @@ letting assistant prose establish consent. `conversation.includeAssistant: true`
 assistant text as untrusted context, never as authorization. Ordinary tool output, synthetic/ignored
 parts, reviewer messages and compaction summaries are excluded.
 
-On OpenCode V2 only, completed `question` tool results supply structured user responses from
-`state.metadata.answers` even when `includeAssistant` is false. The assistant-authored question
-is explicitly labeled **not user authorization**; both the question and selected/custom answers
-are JSON-encoded, and only the actual answers count as user responses. Multiple questions and
-multiple selections are preserved together. An oversized or malformed completed response is
-omitted and marks the conversation incomplete; running, cancelled and unrelated tool calls
-cannot establish consent. Normal live user prompts remain authoritative, including repeated
-revocations, unless a completed question response occurred after the latest ordinary prompt.
-This provides context for review, **not automatic permission**, and requires
+On OpenCode V2 only, completed `question` tool results provide structured context from
+`state.metadata.answers` even when `includeAssistant` is false. A question and its selectable
+option labels are **authored by the agent**, not the user. Clicking an option records a choice,
+not a new user-written command or unrestricted permission. The reviewer receives the
+assistant-authored question next to the selected option labels and, separately, any custom
+answers not matching an option. For incomplete question inputs with missing option definitions,
+answer provenance remains explicitly unclassified. Each choice only applies to the action
+actually asked about; a bare "Yes" does not authorize unrelated actions. The reviewer's
+`userIntent` remains the latest ordinary user prompt, never an answer turn. Later revocations
+take priority.
+
+Questions and answers are JSON-encoded and capped; oversized or malformed completed results
+are omitted and mark the conversation incomplete. Unfinished, cancelled and unrelated tool
+calls do not establish consent. Multiple questions and multi-select choices stay paired.
+This provides review context, **not automatic permission**, and requires
 `conversation.enabled: true`. OpenCode V1 parsing is unchanged.
 
 The V2 fields are supported by OpenCode's own
