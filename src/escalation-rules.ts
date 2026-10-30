@@ -96,8 +96,15 @@ const metadataContentKeys = new Set([
 /** Built-in patch tools, matched through the file paths their headers name. */
 const patchTools = new Set(["apply_patch", "patch"]);
 // OpenCode trims a header line before reading it, so leading whitespace is allowed;
-// never a line break, which would make the scan quadratic over blank lines.
-const patchPath = /^[^\S\r\n]*\*\*\* (?:add file|update file|delete file|move to): (.+)$/gim;
+// the spacing inside the header is read just as loosely (any run of blanks or none,
+// since a rule must not be bypassed by a spelling the host may still accept).
+// Never a line break (including U+2028/U+2029, which `^` also anchors after), which
+// would make the scan quadratic over blank lines.
+const blank = String.raw`[^\S\r\n\u2028\u2029]*`;
+const patchPath = new RegExp(
+  `^${blank}\\*\\*\\*${blank}(?:add file|update file|delete file|move to)${blank}:${blank}(.+)$`,
+  "gim",
+);
 /** Words: a path or flag stays one candidate whatever quotes or operators wrap it. */
 const separators = /[\s"'`;|&<>(){}=]+/;
 
@@ -140,7 +147,11 @@ function candidatesOf(request: ReviewRequest): string[] | "unchecked" {
     if (typeof value === "string") {
       strings++;
       if (patchTools.has(tool) && key === "patchtext") {
-        for (const match of value.matchAll(patchPath)) add(match[1] ?? "");
+        for (const match of value.matchAll(patchPath)) {
+          // The part before a further colon too: a host that reads `path:suffix`
+          // as `path` must still meet the rule for `path`.
+          for (const path of [match[1] ?? "", ...(match[1] ?? "").split(":")]) add(path);
+        }
       } else if (!skipped(key, inMetadata)) {
         addAll(value);
       }

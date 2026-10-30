@@ -162,13 +162,17 @@ export function reviewCheck(): string {
 export function parseVerdict(input: string, expectedCheck: string): ReviewVerdict {
   // Leading reasoning is a draft, not the answer. Some chat templates open
   // the block themselves, so the reply may start inside it.
-  const reply = input.replace(/^\s*(?:<think>)?[\s\S]*?<\/think>/, "");
+  // Found with indexOf, not a regex: a reply that is mostly blanks must not
+  // make the match backtrack.
+  const thinkEnd = input.indexOf("</think>");
+  const reply = thinkEnd === -1 ? input : input.slice(thinkEnd + "</think>".length);
   if (!reply.includes("{")) {
     throw new Error("Reviewer response did not contain JSON.");
   }
   // The answer is the object the reply ends with: a draft or a quotation
   // before a broken final object must not stand in for it.
-  const parsed = verdictObjects(reply).find((candidate) => candidate.end === lastBrace(reply));
+  const answerEnd = lastBrace(reply);
+  const parsed = verdictObjects(reply).find((candidate) => candidate.end === answerEnd);
   if (parsed === undefined) {
     throw new Error("Reviewer response did not match the verdict schema.");
   }
@@ -212,7 +216,9 @@ function hasCheck(value: unknown, expected: string): boolean {
 
 /** The index of the reply's last `}`, ignoring a closing code fence, whitespace or a full stop after it. */
 function lastBrace(reply: string): number {
-  return reply.replace(/[\s`.]+$/, "").length - 1;
+  let end = reply.length;
+  while (end > 0 && /[\s`.]/.test(reply.charAt(end - 1))) end--;
+  return end - 1;
 }
 
 type VerdictObject = {

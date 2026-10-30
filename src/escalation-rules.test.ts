@@ -360,6 +360,44 @@ describe("EscalationRulesReviewer", () => {
     );
   });
 
+  it("reads patch headers as loosely as a host might", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "*", resource: "*.env" }],
+    });
+    for (const header of [
+      "*** Add File:.env",
+      "*** Update File:\t.env",
+      "***Update File: .env",
+      "*** Update File : .env",
+      "*** Update File: .env:x",
+      "*** Move to:.env",
+    ]) {
+      const patchText = `*** Begin Patch\n${header}\n@@\n*** End Patch`;
+      expect((await reviewer.review(toolCall("apply_patch", { patchText }))).verdict, header).toBe(
+        "escalate",
+      );
+    }
+    const other = "*** Begin Patch\n*** Update File:src/a.ts\n@@\n*** End Patch";
+    expect((await reviewer.review(toolCall("apply_patch", { patchText: other }))).verdict).toBe(
+      "allow",
+    );
+  });
+
+  it("scans a patch made of line separators in linear time", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "*", resource: "*.env" }],
+    });
+    for (const separator of ["\u2028", "\u2029", " \u2028", "\n", " \n"]) {
+      const patchText = `*** Begin Patch\n*** Update File: .env\n${separator.repeat(100_000)}x\n*** End Patch`;
+      const started = performance.now();
+      const result = await reviewer.review(toolCall("apply_patch", { patchText }));
+      expect(performance.now() - started).toBeLessThan(2_000);
+      expect(result.verdict).toBe("escalate");
+    }
+  });
+
   it("checks a large write quickly and escalates one too large to check", async () => {
     const rules = Array.from({ length: 200 }, (_, index) => ({
       action: "*",
