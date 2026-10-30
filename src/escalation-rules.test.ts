@@ -384,6 +384,20 @@ describe("EscalationRulesReviewer", () => {
     );
   });
 
+  it("scans a patch made of line separators in linear time", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "*", resource: "*.env" }],
+    });
+    for (const separator of ["\u2028", "\u2029", " \u2028", "\n", " \n"]) {
+      const patchText = `*** Begin Patch\n*** Update File: .env\n${separator.repeat(100_000)}x\n*** End Patch`;
+      const started = performance.now();
+      const result = await reviewer.review(toolCall("apply_patch", { patchText }));
+      expect(performance.now() - started).toBeLessThan(2_000);
+      expect(result.verdict).toBe("escalate");
+    }
+  });
+
   it("checks a large write quickly and escalates one too large to check", async () => {
     const rules = Array.from({ length: 200 }, (_, index) => ({
       action: "*",
