@@ -150,7 +150,15 @@ function questionTurns(input: {
   };
 }
 
-type QuestionPair = { assistantAuthoredQuestion: string; userSubmittedAnswers: string[] };
+type QuestionPair = {
+  assistantAuthoredQuestion: string;
+  /** Selected labels are written by the agent; the user only clicked them. */
+  selectedAssistantOptionLabels: string[];
+  /** Values not matching any offered option are custom responses. */
+  typedCustomAnswers: string[];
+  /** Fallback for incomplete question inputs lacking option definitions. */
+  unclassifiedAnswerValues?: string[];
+};
 
 function questionPair(question: unknown, answer: unknown): QuestionPair | undefined {
   if (
@@ -166,9 +174,22 @@ function questionPair(question: unknown, answer: unknown): QuestionPair | undefi
     )
   )
     return undefined;
+  const values = answer.map((value: string) => value.trim());
+  if (!Array.isArray(question.options)) {
+    return {
+      assistantAuthoredQuestion: question.question,
+      selectedAssistantOptionLabels: [],
+      typedCustomAnswers: [],
+      unclassifiedAnswerValues: values,
+    };
+  }
+  const labels = question.options
+    .filter((option) => isRecord(option) && typeof option.label === "string")
+    .map((option: Record<string, unknown>) => option.label as string);
   return {
     assistantAuthoredQuestion: question.question,
-    userSubmittedAnswers: answer.map((value: string) => value.trim()),
+    selectedAssistantOptionLabels: values.filter((value: string) => labels.includes(value)),
+    typedCustomAnswers: values.filter((value: string) => !labels.includes(value)),
   };
 }
 
@@ -211,7 +232,7 @@ function questionAnswers(parts: unknown): { turns: string[]; incomplete: boolean
       continue;
     }
     const text =
-      "Completed OpenCode question tool. assistantAuthoredQuestion is model-written context, NOT user authorization. Only userSubmittedAnswers are user-selected or typed responses: " +
+      "Completed OpenCode question interaction. The assistant authored each question and option label; clicking an option is NOT the user writing its label. Only typedCustomAnswers are user-written text. Selections are scoped to their paired question, never blanket permission: " +
       JSON.stringify(pairs);
     if (text.length > MAX_QUESTION_TURN_CHARS) {
       incomplete = true;
@@ -254,17 +275,13 @@ export async function readConversation(input: {
   if (latest !== undefined && !latestInHistory) {
     conversation.turns.push({ role: "user", text: latest });
   }
-  // A completed answer can supersede a live prompt only if it follows that
-  // exact last ordinary prompt. Otherwise latest remains authoritative.
-  const laterAnswer = latestInHistory
-    ? conversation.turns
-        .slice(lastOrdinaryIndex + 1)
-        .findLast((turn) => turn.source === "question-answer")
-    : undefined;
+  // userIntent is always the latest ordinary human prompt, never a question
+  // created by the model or the model-authored labels the user selected.
   const userIntent =
-    laterAnswer?.text ??
     latest ??
-    conversation.turns.findLast((turn) => turn.role === "user")?.text;
+    conversation.turns.findLast(
+      (turn) => turn.role === "user" && turn.source !== "question-answer",
+    )?.text;
   const bounded = boundedConversation(conversation.turns);
   bounded.incomplete ||= conversation.incomplete;
   if (conversation.historyLimitReached) bounded.historyLimitReached = true;
