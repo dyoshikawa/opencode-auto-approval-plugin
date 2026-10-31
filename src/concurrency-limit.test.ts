@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { ConcurrencyLimitedReviewer } from "./concurrency-limit.js";
 import type { ReviewVerdict } from "./reviewer.js";

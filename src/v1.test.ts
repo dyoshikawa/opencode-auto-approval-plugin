@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { createV1Plugin, createV1SessionClient, reviewerAgentConfig } from "./v1.js";
 

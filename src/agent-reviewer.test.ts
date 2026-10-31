@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import { AgentReviewer, reviewerAgentPrompt, reviewerAllowedTools } from "./agent-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";

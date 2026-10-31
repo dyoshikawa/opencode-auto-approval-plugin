@@ -1,5 +1,5 @@
 // cspell:words Bldmls glpat
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { RedactingReviewer, redactForReview } from "./redaction.js";
 import type { ReviewRequest } from "./reviewer.js";

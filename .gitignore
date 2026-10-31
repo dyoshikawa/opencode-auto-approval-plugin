@@ -239,3 +239,6 @@ rulesync.local.jsonc
 **/.opencode/plugins/rulesync-hooks.js
 !.rulesync/.aiignore
 # End of Rulesync
+
+# Vitest cache written by `vp test`
+.vitest/

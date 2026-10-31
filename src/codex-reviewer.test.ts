@@ -2,7 +2,7 @@ import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, parse } from "node:path";
 
 import type { CodexOptions, ThreadOptions, TurnOptions } from "@openai/codex-sdk";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished } from "vite-plus/test";
 
 import { CodexReviewer, type CreateCodex, loadCodex } from "./codex-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
