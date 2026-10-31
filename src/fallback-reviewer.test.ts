@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { OversizeFallbackReviewer } from "./fallback-reviewer.js";
 import { OversizeError, type Reviewer, type ReviewRequest } from "./reviewer.js";

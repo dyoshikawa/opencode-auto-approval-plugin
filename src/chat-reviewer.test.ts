@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ChatReviewer } from "./chat-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";

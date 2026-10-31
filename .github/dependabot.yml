@@ -23,10 +23,6 @@ updates:
       - "dyoshikawa"
     allow:
       - dependency-type: "all"
-    ignore:
-      # tsdown 0.23.2 cannot emit declarations with TypeScript 7 (classic API missing)
-      - dependency-name: "tsdown"
-        versions: ["0.23.2"]
 
   # Automatic updates for GitHub Actions
   - package-ecosystem: "github-actions"

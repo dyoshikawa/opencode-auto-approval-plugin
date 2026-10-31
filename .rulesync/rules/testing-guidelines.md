@@ -16,5 +16,5 @@ globs: ["**/*.test.ts"]
   - Mock `process.cwd()` to return the test directory. You must not use `process.chdir()` because it
     changes the current working directory globally and affects other tests.
 - In tests, don't change directories or files outside the project directory, even in global mode.
-- Run the test suite with `pnpm test`. Use `pnpm exec vitest run --silent=false` when you need to see
+- Run the test suite with `pnpm test`. Use `pnpm exec vp test run --silent=false` when you need to see
   logs.
