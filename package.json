@@ -1,6 +1,6 @@
 {
   "name": "opencode-auto-approval-plugin",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "opencode plugin that auto-approves tool permission requests based on configurable rules",
   "keywords": [
     "opencode",
@@ -72,10 +72,10 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.310",
-    "@openai/codex-sdk": "0.164.0",
+    "@anthropic-ai/claude-agent-sdk": "0.3.312",
+    "@openai/codex-sdk": "0.165.0",
     "@opencode-ai/plugin": "1.19.4",
-    "@opencode/plugin": "2.1.4",
+    "@opencode/plugin": "2.2.0",
     "@secretlint/secretlint-rule-preset-recommend": "13.1.0",
     "@tsconfig/node22": "22.0.6",
     "@types/node": "26.6.5",
@@ -83,13 +83,13 @@
     "cspell": "10.4.0",
     "knip": "6.43.0",
     "lint-staged": "17.6.0",
-    "oxfmt": "0.74.0",
-    "oxlint": "1.89.0",
-    "rulesync": "42.0.0",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "rulesync": "43.2.0",
     "secretlint": "13.1.0",
     "simple-git-hooks": "2.14.0",
     "sort-package-json": "4.1.0",
-    "tsdown": "0.23.1",
+    "tsdown": "0.23.3",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
     "vitest": "5.0.5"

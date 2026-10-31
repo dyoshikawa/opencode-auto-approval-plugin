@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AgentReviewer } from "./agent-reviewer.js";
+import { AgentReviewer, reviewerAgentPrompt, reviewerAllowedTools } from "./agent-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
 import {
   type ReviewSessionClient,
@@ -50,6 +50,40 @@ function clientWithResponse(input: { response: string }): ReviewSessionClient & 
     },
   };
 }
+
+describe("reviewer-only permission boundaries", () => {
+  it("keeps the reviewer read-only without defining a blanket ban on agents delegating", () => {
+    expect(reviewerAllowedTools).toEqual(["read", "glob", "grep", "lsp"]);
+    expect(reviewerAgentPrompt).toContain("Never modify files, run shell commands");
+    expect(reviewerAgentPrompt).toContain("delegate work yourself");
+    expect(reviewerAgentPrompt).toContain("your own actions as reviewer");
+    expect(reviewerAgentPrompt).toContain("neither automatically allowed nor automatically denied");
+  });
+
+  it.each(["allow", "deny"] as const)(
+    "reviews a delegated operation and preserves the model's %s decision",
+    async (verdict) => {
+      const client = clientWithResponse({
+        response: JSON.stringify({ verdict, reason: "Reviewed user authorization" }),
+      });
+      const reviewer = new AgentReviewer({
+        client,
+        configuration: parsePluginConfiguration({ options: {} }),
+      });
+      const decision = await reviewer.review({
+        source: "tool-call",
+        sessionID: "main-session",
+        action: "task",
+        resource: { subagent: "inspector", prompt: "Inspect only" },
+        userIntent: "Ask inspector to inspect the project.",
+      });
+
+      expect(decision.verdict).toBe(verdict);
+      expect(client.prompts[0]?.text).toContain('"action":"task"');
+      expect(client.prompts[0]?.text).toContain("Ask inspector to inspect the project.");
+    },
+  );
+});
 
 describe("AgentReviewer", () => {
   it("inherits the main session model when no reviewer model is configured", async () => {

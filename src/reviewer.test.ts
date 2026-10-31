@@ -214,6 +214,20 @@ describe("parseVerdict", () => {
     ).toThrow(OversizeError);
   });
 
+  it("parses a reply padded with blanks in linear time", () => {
+    const verdict = `{"verdict":"allow","reason":"Fine.","check":"${check}"}`;
+    for (const reply of [
+      `${" ".repeat(200_000)}${verdict}`,
+      `${verdict}${" ".repeat(200_000)}`,
+      `<think>${" ".repeat(200_000)}</think>${verdict}`,
+      `{"a":1}${" ".repeat(200_000)}${verdict}`,
+    ]) {
+      const started = performance.now();
+      expect(parseVerdict(reply, check).verdict).toBe("allow");
+      expect(performance.now() - started).toBeLessThan(1_000);
+    }
+  });
+
   it("tells a reply without JSON from one without a verdict", () => {
     expect(() => parseVerdict("Looks fine.", check)).toThrow("did not contain JSON");
     expect(() => parseVerdict('{"answer":"yes"}', check)).toThrow(
