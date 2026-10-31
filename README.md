@@ -776,9 +776,32 @@ the plugin's `options` object (the second tuple item under `plugin` on OpenCode 
 Enabled, each review reads the current session's available history, retaining at most **8 whole turns / 12,000 characters**. Only user turns are included by
 default, so a short request such as "continue" can refer to an earlier user instruction without
 letting assistant prose establish consent. `conversation.includeAssistant: true` also sends
-assistant text as untrusted context, never as authorization. Tool output, synthetic/ignored parts,
-reviewer messages and compaction summaries are excluded. No `AGENTS.md` files are automatically
-loaded into the payload; configured `reviewer.instructions` still apply to every backend.
+assistant text as untrusted context, never as authorization. Ordinary tool output, synthetic/ignored
+parts, reviewer messages and compaction summaries are excluded.
+
+On OpenCode V2 only, completed `question` tool results provide structured context from
+`state.metadata.answers` even when `includeAssistant` is false. A question and its selectable
+option labels are **authored by the agent**, not the user. Clicking an option records a choice,
+not a new user-written command or unrestricted permission. The reviewer receives the
+assistant-authored question next to the selected option labels and, separately, any custom
+answers not matching an option. For incomplete question inputs with missing option definitions,
+answer provenance remains explicitly unclassified. Each choice only applies to the action
+actually asked about; a bare "Yes" does not authorize unrelated actions. The reviewer's
+`userIntent` remains the latest ordinary user prompt, never an answer turn. Later revocations
+take priority.
+
+Questions and answers are JSON-encoded and capped; oversized or malformed completed results
+are omitted and mark the conversation incomplete. Unfinished, cancelled and unrelated tool
+calls do not establish consent. Multiple questions and multi-select choices stay paired.
+This provides review context, **not automatic permission**, and requires
+`conversation.enabled: true`. OpenCode V1 parsing is unchanged.
+
+The V2 fields are supported by OpenCode's own
+[question-answer rendering](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/tui/src/routes/session/index.tsx),
+[question answer schema](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/schema/src/question.ts),
+and [V2 assistant tool-part type](https://github.com/anomalyco/opencode/blob/726cf096396d5014c3b1845e231cc01efe0421ee/packages/client/src/promise/generated/types.ts).
+No `AGENTS.md` files are automatically loaded into the payload; configured
+`reviewer.instructions` still apply to every backend.
 
 History reads can add up to **1 second** (`HISTORY_TIMEOUT_MS`) before each review, including every
 tool call in `all-tools` mode. V1 requests at most **32 host messages** (`HISTORY_MESSAGE_LIMIT`);

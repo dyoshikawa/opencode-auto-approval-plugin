@@ -6,7 +6,12 @@ export const HISTORY_MESSAGE_LIMIT = 32;
 export const MAX_CONVERSATION_TURNS = 8;
 const MAX_CONVERSATION_CHARACTERS = 12_000;
 
-export type ConversationTurn = { role: "user" | "assistant"; text: string };
+export type ConversationTurn = {
+  role: "user" | "assistant";
+  text: string;
+  /** User answer extracted from a completed assistant question tool result. */
+  source?: "question-answer";
+};
 export type ConversationContext = {
   turns: ConversationTurn[];
   /** Evidence of omission, not a guarantee of completeness when false. */
@@ -62,6 +67,9 @@ export function conversationFromMessages(input: {
       includeAssistant: input.includeAssistant,
     });
     if (turn) turns.push(turn);
+    const answerContext = questionTurns({ generation: input.generation, info, parts });
+    turns.push(...answerContext.turns);
+    incomplete ||= answerContext.incomplete;
   }
   const conversation = boundedConversation(turns);
   conversation.incomplete ||= incomplete;
@@ -88,6 +96,10 @@ function excluded(info: Record<string, unknown>): boolean {
   );
 }
 
+function excludedMessage(info: Record<string, unknown>): boolean {
+  return excluded(info) || (isRecord(info.metadata) && excluded(info.metadata));
+}
+
 function humanTurn(input: {
   message: Record<string, unknown>;
   info: Record<string, unknown>;
@@ -95,8 +107,7 @@ function humanTurn(input: {
   generation: "v1" | "v2";
   includeAssistant: boolean;
 }): ConversationTurn | undefined {
-  if (excluded(input.info) || (isRecord(input.info.metadata) && excluded(input.info.metadata)))
-    return undefined;
+  if (excludedMessage(input.info)) return undefined;
   const role = input.generation === "v1" ? input.info.role : input.info.type;
   if (role !== "user" && !(role === "assistant" && input.includeAssistant)) return undefined;
   const text =
@@ -108,6 +119,128 @@ function humanTurn(input: {
         ? textFromParts({ parts: input.parts, skipSyntheticOrIgnored: true })
         : "";
   return text.trim() || role === "user" ? { role, text } : undefined;
+}
+
+/**
+ * OpenCode's question tool stores answers in state.metadata.answers.
+ * Confirmed against the official question tool, question schema and client
+ * SessionMessageAssistantTool type (OpenCode upstream).
+ */
+const MAX_QUESTION_TURN_CHARS = 2_500;
+const MAX_QUESTION_TEXT_CHARS = 500;
+const MAX_ANSWER_TEXT_CHARS = 1_000;
+const MAX_QUESTIONS = 8;
+const MAX_SELECTED_ANSWERS = 12;
+
+function questionTurns(input: {
+  generation: "v1" | "v2";
+  info: Record<string, unknown>;
+  parts: unknown;
+}): ConversationContext {
+  if (input.generation !== "v2" || input.info.type !== "assistant" || excludedMessage(input.info))
+    return { turns: [], incomplete: false };
+  const answers = questionAnswers(input.parts);
+  return {
+    turns: answers.turns.map((text) => ({
+      role: "user" as const,
+      text,
+      source: "question-answer" as const,
+    })),
+    incomplete: answers.incomplete,
+  };
+}
+
+type QuestionPair = {
+  assistantAuthoredQuestion: string;
+  /** Selected labels are written by the agent; the user only clicked them. */
+  selectedAssistantOptionLabels: string[];
+  /** Values not matching any offered option are custom responses. */
+  typedCustomAnswers: string[];
+  /** Fallback for incomplete question inputs lacking option definitions. */
+  unclassifiedAnswerValues?: string[];
+};
+
+function questionPair(question: unknown, answer: unknown): QuestionPair | undefined {
+  if (
+    !isRecord(question) ||
+    typeof question.question !== "string" ||
+    !question.question.trim() ||
+    question.question.length > MAX_QUESTION_TEXT_CHARS ||
+    !Array.isArray(answer) ||
+    answer.length === 0 ||
+    answer.length > MAX_SELECTED_ANSWERS ||
+    answer.some(
+      (value) => typeof value !== "string" || !value.trim() || value.length > MAX_ANSWER_TEXT_CHARS,
+    )
+  )
+    return undefined;
+  const values = answer.map((value: string) => value.trim());
+  if (!Array.isArray(question.options)) {
+    return {
+      assistantAuthoredQuestion: question.question,
+      selectedAssistantOptionLabels: [],
+      typedCustomAnswers: [],
+      unclassifiedAnswerValues: values,
+    };
+  }
+  const labels = question.options
+    .filter((option) => isRecord(option) && typeof option.label === "string")
+    .map((option: Record<string, unknown>) => option.label as string);
+  return {
+    assistantAuthoredQuestion: question.question,
+    selectedAssistantOptionLabels: values.filter((value: string) => labels.includes(value)),
+    typedCustomAnswers: values.filter((value: string) => !labels.includes(value)),
+  };
+}
+
+/** A completed result is evidence of a user response, not an automatic grant.
+ * Keep the model-authored question explicitly separate from the actual answer,
+ * JSON-encode values to prevent quote injection and skip oversized results.
+ */
+function questionAnswers(parts: unknown): { turns: string[]; incomplete: boolean } {
+  if (!Array.isArray(parts)) return { turns: [], incomplete: false };
+  const turns: string[] = [];
+  let incomplete = false;
+  for (const part of parts) {
+    if (!isRecord(part) || part.type !== "tool" || part.name !== "question") continue;
+    const state = part.state;
+    if (!isRecord(state) || state.status !== "completed") continue;
+    const questions = isRecord(state.input) ? state.input.questions : undefined;
+    const answers = isRecord(state.metadata) ? state.metadata.answers : undefined;
+    if (
+      !Array.isArray(questions) ||
+      !Array.isArray(answers) ||
+      questions.length === 0 ||
+      questions.length > MAX_QUESTIONS ||
+      questions.length !== answers.length
+    ) {
+      incomplete = true;
+      continue;
+    }
+    const pairs: QuestionPair[] = [];
+    let valid = true;
+    for (let i = 0; i < questions.length; i++) {
+      const pair = questionPair(questions[i], answers[i]);
+      if (!pair) {
+        valid = false;
+        break;
+      }
+      pairs.push(pair);
+    }
+    if (!valid) {
+      incomplete = true;
+      continue;
+    }
+    const text =
+      "Completed OpenCode question interaction. The assistant authored each question and option label; clicking an option is NOT the user writing its label. Only typedCustomAnswers are user-written text. Selections are scoped to their paired question, never blanket permission: " +
+      JSON.stringify(pairs);
+    if (text.length > MAX_QUESTION_TURN_CHARS) {
+      incomplete = true;
+      continue;
+    }
+    turns.push(text);
+  }
+  return { turns, incomplete };
 }
 
 /** No cache: re-read the host and reconcile the live prompt before every review. */
@@ -132,14 +265,22 @@ export async function readConversation(input: {
     conversation.incomplete = true;
   }
   const latest = input.latest();
-  if (
-    latest !== undefined &&
-    conversation.turns.findLast((turn) => turn.role === "user")?.text !== latest
-  ) {
+  // Compare only with the last ordinary user turn. Repeated "stop" and
+  // "continue" are distinct new prompts when intervening turns exist.
+  const lastOrdinaryIndex = conversation.turns.findLastIndex(
+    (turn) => turn.role === "user" && turn.source !== "question-answer",
+  );
+  const latestInHistory =
+    latest !== undefined && conversation.turns[lastOrdinaryIndex]?.text === latest;
+  if (latest !== undefined && !latestInHistory) {
     conversation.turns.push({ role: "user", text: latest });
   }
-  // Keep the latest intent even if it cannot fit as a whole conversation turn.
-  const userIntent = latest ?? conversation.turns.findLast((turn) => turn.role === "user")?.text;
+  // userIntent is always the latest ordinary human prompt, never a question
+  // created by the model or the model-authored labels the user selected.
+  const userIntent =
+    latest ??
+    conversation.turns.findLast((turn) => turn.role === "user" && turn.source !== "question-answer")
+      ?.text;
   const bounded = boundedConversation(conversation.turns);
   bounded.incomplete ||= conversation.incomplete;
   if (conversation.historyLimitReached) bounded.historyLimitReached = true;
