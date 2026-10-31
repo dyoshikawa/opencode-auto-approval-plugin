@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { parsePluginConfiguration } from "./config.js";
 import { DecisionReviewer } from "./decision-reviewer.js";

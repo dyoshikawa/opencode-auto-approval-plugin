@@ -937,26 +937,27 @@ it never turns a built-in deny into an allow.
 
 ## Toolchain
 
-| Area              | Tool                                                                              | Config                                                      |
-| ----------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| Runtime / tooling | [mise](https://mise.jdx.dev/)                                                     | `mise.toml`                                                 |
-| Package manager   | [pnpm](https://pnpm.io/)                                                          | `pnpm-workspace.yaml`, `.npmrc`                             |
-| Language          | [TypeScript](https://www.typescriptlang.org/)                                     | `tsconfig.json`                                             |
-| Build             | [tsdown](https://tsdown.dev/)                                                     | `tsdown.config.ts`                                          |
-| Test              | [Vitest](https://vitest.dev/)                                                     | `vitest.config.ts`                                          |
-| Format            | [oxfmt](https://oxc.rs/)                                                          | `.oxfmtrc.json`                                             |
-| Lint              | [oxlint](https://oxc.rs/)                                                         | `.oxlintrc.json`                                            |
-| Unused code       | [knip](https://knip.dev/)                                                         | `knip.ts`                                                   |
-| Spelling          | [cspell](https://cspell.org/)                                                     | `cspell.json`                                               |
-| Secret scanning   | [secretlint](https://github.com/secretlint/secretlint)                            | `.secretlintrc.json`                                        |
-| Git hooks         | [simple-git-hooks](https://github.com/toplenboren/simple-git-hooks) + lint-staged | `package.json`, `.lintstagedrc.js`                          |
-| AI rules          | [rulesync](https://github.com/dyoshikawa/rulesync)                                | `rulesync.jsonc`, `.rulesync/`                              |
-| Workflow lint     | [actionlint](https://github.com/rhysd/actionlint)                                 | `.github/workflows/actionlint.yml`                          |
-| Action pinning    | [pinact](https://github.com/suzuki-shunsuke/pinact)                               | `.pinact.yaml`, `.github/workflows/pinact.yml`              |
-| Dependency bumps  | Dependabot                                                                        | `.github/dependabot.yml`                                    |
-| Misconfig scan    | [Trivy](https://trivy.dev/)                                                       | `.trivyignore`, `.github/workflows/trivy-security-scan.yml` |
-| Dev environment   | [Dev Container](https://containers.dev/)                                          | `.devcontainer/`                                            |
-| CI / Release      | GitHub Actions                                                                    | `.github/workflows/ci.yml`, `publish.yml`                   |
+| Area              | Tool                                                                                | Config                                                      |
+| ----------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Runtime / tooling | [mise](https://mise.jdx.dev/)                                                       | `mise.toml`                                                 |
+| Package manager   | [pnpm](https://pnpm.io/)                                                            | `pnpm-workspace.yaml`, `.npmrc`                             |
+| Language          | [TypeScript](https://www.typescriptlang.org/)                                       | `tsconfig.json`                                             |
+| Toolchain         | [Vite+](https://viteplus.dev/) (`vp`: tsdown, Vitest, Oxlint, Oxfmt, staged checks) | `vite.config.ts`                                            |
+| Build             | [tsdown](https://tsdown.dev/) (through `vp pack`)                                   | `vite.config.ts` (`pack`)                                   |
+| Test              | [Vitest](https://vitest.dev/) (through `vp test`)                                   | `vitest.config.ts`                                          |
+| Format            | [Oxfmt](https://oxc.rs/) (through `vp fmt`)                                         | `vite.config.ts` (`fmt`)                                    |
+| Lint              | [Oxlint](https://oxc.rs/) (through `vp lint`)                                       | `vite.config.ts` (`lint`)                                   |
+| Unused code       | [knip](https://knip.dev/)                                                           | `knip.ts`                                                   |
+| Spelling          | [cspell](https://cspell.org/)                                                       | `cspell.json`                                               |
+| Secret scanning   | [secretlint](https://github.com/secretlint/secretlint)                              | `.secretlintrc.json`                                        |
+| Git hooks         | Vite+ hooks (`vp staged` on pre-commit)                                             | `.vite-hooks/pre-commit`, `vite.config.ts` (`staged`)       |
+| AI rules          | [rulesync](https://github.com/dyoshikawa/rulesync)                                  | `rulesync.jsonc`, `.rulesync/`                              |
+| Workflow lint     | [actionlint](https://github.com/rhysd/actionlint)                                   | `.github/workflows/actionlint.yml`                          |
+| Action pinning    | [pinact](https://github.com/suzuki-shunsuke/pinact)                                 | `.pinact.yaml`, `.github/workflows/pinact.yml`              |
+| Dependency bumps  | Dependabot                                                                          | `.github/dependabot.yml`                                    |
+| Misconfig scan    | [Trivy](https://trivy.dev/)                                                         | `.trivyignore`, `.github/workflows/trivy-security-scan.yml` |
+| Dev environment   | [Dev Container](https://containers.dev/)                                            | `.devcontainer/`                                            |
+| CI / Release      | GitHub Actions                                                                      | `.github/workflows/ci.yml`, `publish.yml`                   |
 
 ## Getting started
 
@@ -968,19 +969,19 @@ pnpm cicheck       # run everything CI runs
 
 ## Scripts
 
-| Script                 | Description                                                          |
-| ---------------------- | -------------------------------------------------------------------- |
-| `pnpm build`           | Build the library (ESM + CJS, types) and the `stats` bin into `dist` |
-| `pnpm check`           | `fmt:check` + `oxlint` + `typecheck`                                 |
-| `pnpm cicheck`         | `cicheck:code` + `cicheck:content` — what CI runs                    |
-| `pnpm cicheck:code`    | `check` + `test`                                                     |
-| `pnpm cicheck:content` | `cspell` + `secretlint`                                              |
-| `pnpm fix`             | Auto-fix formatting and lint problems                                |
-| `pnpm generate`        | Regenerate AI tool configs from `.rulesync/`                         |
-| `pnpm knip`            | Report unused files, exports, and dependencies                       |
-| `pnpm test`            | Run the test suite                                                   |
-| `pnpm test:coverage`   | Run the test suite with coverage                                     |
-| `pnpm typecheck`       | Type-check without emitting                                          |
+| Script                 | Description                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| `pnpm build`           | Build the library (ESM + CJS, types) and the `stats` bin into `dist` (`vp pack`) |
+| `pnpm check`           | `vp check` (format, lint) + `typecheck`                                          |
+| `pnpm cicheck`         | `cicheck:code` + `cicheck:content` — what CI runs                                |
+| `pnpm cicheck:code`    | `check` + `test`                                                                 |
+| `pnpm cicheck:content` | `cspell` + `secretlint`                                                          |
+| `pnpm fix`             | Auto-fix formatting and lint problems (`vp check --fix`)                         |
+| `pnpm generate`        | Regenerate AI tool configs from `.rulesync/`                                     |
+| `pnpm knip`            | Report unused files, exports, and dependencies                                   |
+| `pnpm test`            | Run the test suite (`vp test run`)                                               |
+| `pnpm test:coverage`   | Run the test suite with coverage                                                 |
+| `pnpm typecheck`       | Type-check without emitting                                                      |
 
 ## mise tasks
 
@@ -1000,7 +1001,7 @@ pnpm cicheck       # run everything CI runs
   step is genuinely required. CI installs with `--ignore-scripts`.
 - Every third-party GitHub Action is pinned to a full-length commit SHA, enforced by `pinact` in CI.
 - Workflows declare the narrowest `permissions:` block they need.
-- `secretlint` runs over every staged file through lint-staged, and over the whole tree in CI.
+- `secretlint` runs over every staged file through `vp staged`, and over the whole tree in CI.
 - `trivy config` scans `.devcontainer/` and `.github/workflows/` for misconfigurations on every push
   and pull request that touches them; `CRITICAL` and `HIGH` findings fail the build. Suppressions
   live in `.trivyignore`, each with the reason it is safe.

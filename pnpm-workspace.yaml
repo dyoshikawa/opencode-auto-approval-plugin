@@ -5,7 +5,6 @@ allowBuilds:
   esbuild: false
   msgpackr-extract: false
   protobufjs: false
-  simple-git-hooks: false
   tldjs: false
 ignoreScripts: false
 # Refuse dependency versions published less than a day ago, so a compromised
@@ -20,3 +19,22 @@ minimumReleaseAge: 1440 # 1 day
 overrides:
   "effect>toml": 5.0.1
   "@opencode-ai/plugin>zod": 4.6.7
+  # Vite+ (`vp`): every package that asks for `vite` or `vitest` gets the
+  # copies Vite+ ships. `vite` is Vite+'s core under the upstream name, so
+  # packages that import `vite` keep working. package.json pins vite-plus and
+  # the tools it drives without the pnpm catalog: `prepare` runs when someone
+  # installs this package from Git, and npm cannot read `catalog:`. `vp`
+  # resolves oxfmt and oxlint from the working directory before its own
+  # copies, so they stay direct dependencies at the versions vite-plus bundles
+  # (its dist/toolchain.json); a checkout nested in another project would
+  # otherwise run that project's formatter and linter.
+  vite@*: npm:@voidzero-dev/vite-plus-core@1.4.0
+  vitest@*: 5.0.5
+# Plugins declare peer ranges on upstream vite/vitest; the aliased copies satisfy them.
+peerDependencyRules:
+  allowAny:
+    - vite
+    - vitest
+  allowedVersions:
+    vite: "*"
+    vitest: "*"

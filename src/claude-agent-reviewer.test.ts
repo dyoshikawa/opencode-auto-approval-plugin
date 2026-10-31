@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   type ClaudeAgentQuery,
