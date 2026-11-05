@@ -26,10 +26,7 @@ function createContext(input: { options?: Record<string, unknown> } = {}) {
     ]),
     interrupt: vi.fn(async () => ({})),
     remove: vi.fn(async () => ({})),
-    get: vi.fn(async () => ({
-      id: "session-1",
-      model: { providerID: "openai", id: "gpt-5.6", variant: undefined as string | undefined },
-    })),
+    get: vi.fn(async () => ({ id: "session-1", model: { providerID: "openai", id: "gpt-5.6" } })),
     hook: vi.fn(async (name: string, callback: Hook) => {
       hooks[`session.${name}`] = callback;
       return registration;
@@ -260,7 +257,7 @@ describe("V2 plugin (opencode 2.x)", () => {
     session.get.mockResolvedValue({
       id: "session-1",
       model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "low" },
-    });
+    } as never);
     const { plugin, review } = createPlugin({ verdict: "allow" });
     await plugin.setup(context as never);
 
