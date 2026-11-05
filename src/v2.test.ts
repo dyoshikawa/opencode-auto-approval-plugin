@@ -26,10 +26,10 @@ function createContext(input: { options?: Record<string, unknown> } = {}) {
     ]),
     interrupt: vi.fn(async () => ({})),
     remove: vi.fn(async () => ({})),
-    get: vi.fn(async (): Promise<{
-      id: string;
-      model: { providerID: string; id: string; variant?: string };
-    }> => ({ id: "session-1", model: { providerID: "openai", id: "gpt-5.6" } })),
+    get: vi.fn(async () => ({
+      id: "session-1",
+      model: { providerID: "openai", id: "gpt-5.6", variant: undefined as string | undefined },
+    })),
     hook: vi.fn(async (name: string, callback: Hook) => {
       hooks[`session.${name}`] = callback;
       return registration;
