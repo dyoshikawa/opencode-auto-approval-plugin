@@ -99,6 +99,11 @@ Set `reviewer.agent.model` to run reviews through a separately configured OpenCo
 model. With the default `agent` backend the plugin never reads or manages API keys; authentication
 remains entirely in OpenCode.
 
+On OpenCode 2.x, append `#variant` to `reviewer.agent.model.modelID` to choose a model
+variant, for example `"deepseek-v4.1-flash#low"`. The reviewer session receives the base
+model ID and variant separately. Without an explicit reviewer model, the reviewer also
+inherits the originating session's variant. This syntax is not supported by the V1 reviewer.
+
 ```jsonc
 {
   "plugins": [
