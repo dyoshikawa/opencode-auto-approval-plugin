@@ -252,6 +252,24 @@ describe("V2 plugin (opencode 2.x)", () => {
     expect(event).toMatchObject({ effect: "allow", message: "reviewed" });
   });
 
+  it("preserves the origin session's model variant when inheriting its model", async () => {
+    const { context, hooks, session } = createContext();
+    session.get.mockResolvedValue({
+      id: "session-1",
+      model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "low" },
+    } as never);
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+
+    await hooks["permission.evaluate"]?.(askEvent());
+
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { providerID: "opencode-go", modelID: "deepseek-v4.1-flash#low" },
+      }),
+    );
+  });
+
   it("reads a subagent session's intent from its root session, never from the parent agent's prompt", async () => {
     const { context, hooks, session } = createContext({
       options: { conversation: { enabled: true } },
@@ -850,6 +868,21 @@ describe("V2 session client", () => {
     });
     expect(session.wait).toHaveBeenCalledWith({ sessionID: "review-session" });
     expect(text).toBe('{"verdict":"allow","reason":"safe"}');
+  });
+
+  it("separates a configured model variant when creating a reviewer session", async () => {
+    const { context, session } = createContext();
+    const client = createV2SessionClient(context as never);
+
+    await client.create({
+      model: { providerID: "opencode-go", modelID: "deepseek-v4.1-flash#low" },
+    });
+
+    expect(session.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "low" },
+      }),
+    );
   });
 
   it("omits the model when none is known", async () => {

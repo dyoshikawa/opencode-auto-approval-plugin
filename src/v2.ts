@@ -58,15 +58,26 @@ function unchanged(grant: {
   }
 }
 
-/** V2 model references use `id`; the plugin configuration keeps V1's `modelID`. */
-function toModelRef(model: ModelReference): { providerID: string; id: string } {
-  return { providerID: model.providerID, id: model.modelID };
+/** V2 separates the variant from the model ID; config retains the V1 modelID shape. */
+function toModelRef(model: ModelReference): { providerID: string; id: string; variant?: string } {
+  const hash = model.modelID.indexOf("#");
+  if (hash === -1) return { providerID: model.providerID, id: model.modelID };
+  return {
+    providerID: model.providerID,
+    id: model.modelID.slice(0, hash),
+    variant: model.modelID.slice(hash + 1),
+  };
 }
 
 function fromModelRef(
-  model: { providerID: string; id: string } | undefined,
+  model: { providerID: string; id: string; variant?: string } | undefined,
 ): ModelReference | undefined {
-  return model ? { providerID: model.providerID, modelID: model.id } : undefined;
+  return model
+    ? {
+        providerID: model.providerID,
+        modelID: model.id + (model.variant ? `#${model.variant}` : ""),
+      }
+    : undefined;
 }
 
 /** Everything denied except the read-only tools; last matching rule wins. */
