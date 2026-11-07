@@ -495,8 +495,8 @@ workspace. That state goes to the reviewer's provider, so treat it as sent there
   `X-API-Key:` / `Bearer`, a `--password` / `--token`-style flag, or in a `*_KEY=` / `*_TOKEN=` /
   `*_SECRET=` / `*_PASSWORD=`-style assignment. The tool OpenCode runs is never changed, and the
   reviewer is told what the markers mean. The reviewer's reason, which the agent can see in a
-  tool error, goes through the same redaction. Redaction is deliberately conservative so that crafted
-  text cannot hide a destination, a file or a command from the reviewer: a secret-shaped value is
+  tool error, goes through the same redaction plus the broader audit-log rules. Redaction is
+  deliberately conservative so that crafted text cannot hide a destination, a file or a command from the reviewer: a secret-shaped value is
   one run of 16 or more letters, digits and `_+=-` (or a JWT), so nothing with a space, a quote,
   shell syntax, `.`, `/`, `~`, `:` or `@` — no path, host or URL — is ever replaced, and
   `SSH_AUTH_SOCK=` / `*_PATH=` values stay visible. A short password, a secret in another shape, an
@@ -728,7 +728,8 @@ with the matched rule as the reason. Rules are off by default.
   reviewer's own read-only session is not checked against the rules, nor against your OpenCode
   `read` denies: the default `opencode` runtime may `read` any project file except `*.env` /
   `*.env.*` (`*.env.example` allowed). That `.env` rule covers `read` only: `grep` searches every
-  file, `.env` included, and the `claude-agent-sdk` and `codex-sdk` runtimes have no such rule.
+  file, `.env` included, a symlink to `.env` is read under its own name, and the
+  `claude-agent-sdk` and `codex-sdk` runtimes have no such rule.
   Keep OpenCode `deny` permissions for what must never run; they stay authoritative whatever the
   reviewer says.
 - With `allToolsNativeAsks: "review"`, a same-action native ask is answered from the reviewed call,
