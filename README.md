@@ -496,9 +496,10 @@ workspace. That state goes to the reviewer's provider, so treat it as sent there
   `*_SECRET=` / `*_PASSWORD=`-style assignment. The tool OpenCode runs is never changed, and the
   reviewer is told what the markers mean. The reviewer's reason, which the agent can see in a
   tool error, goes through the same redaction plus the broader audit-log rules. Redaction is
-  deliberately conservative so that crafted text cannot hide a destination, a file or a command from the reviewer: a secret-shaped value is
-  one run of 16 or more letters, digits and `_+=-` (or a JWT), so nothing with a space, a quote,
-  shell syntax, `.`, `/`, `~`, `:` or `@` — no path, host or URL — is ever replaced, and
+  deliberately conservative so that crafted text cannot hide a destination, a file or a command
+  from the reviewer: a secret-shaped value is one run of 16 or more letters, digits and `_+=-` (or
+  a JWT), so nothing with a space, a quote, shell syntax, `.`, `/`, `~`, `:` or `@` — no path, host
+  or URL — is ever replaced, and
   `SSH_AUTH_SOCK=` / `*_PATH=` values stay visible. A short password, a secret in another shape, an
   SDK runtime's own key in the environment, or one the reviewer reads from a file still reaches
   the provider, and so does a value in a variable the same text names again (`$NAME`,
