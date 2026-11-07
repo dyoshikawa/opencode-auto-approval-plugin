@@ -185,12 +185,47 @@ function questionPair(question: unknown, answer: unknown): QuestionPair | undefi
   }
   const labels = question.options
     .filter((option) => isRecord(option) && typeof option.label === "string")
-    .map((option: Record<string, unknown>) => option.label as string);
+    // Trimmed like the answers, so a padded label the user clicked still reads as a selection.
+    .map((option: Record<string, unknown>) => (option.label as string).trim());
   return {
     assistantAuthoredQuestion: question.question,
     selectedAssistantOptionLabels: values.filter((value: string) => labels.includes(value)),
     typedCustomAnswers: values.filter((value: string) => !labels.includes(value)),
   };
+}
+
+const questionAnswerPreamble =
+  "Completed OpenCode question interaction. The assistant authored each question and option label; clicking an option is NOT the user writing its label. Only typedCustomAnswers are user-written text. Selections are scoped to their paired question, never blanket permission: ";
+
+/**
+ * A question-answer turn's text with every string in its pairs passed through
+ * `map` before they are JSON-encoded again, so a rule that needs the raw text
+ * (a multi-line key, a quoted value) sees it rather than its escaped form.
+ * `undefined` when the text is not a question-answer turn this module wrote.
+ */
+export function mapQuestionAnswerStrings(input: {
+  text: string;
+  map: (value: string) => string;
+}): string | undefined {
+  if (!input.text.startsWith(questionAnswerPreamble)) return undefined;
+  let pairs: unknown;
+  try {
+    pairs = JSON.parse(input.text.slice(questionAnswerPreamble.length));
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(pairs)) return undefined;
+  return questionAnswerPreamble + JSON.stringify(mapStrings({ value: pairs, map: input.map }));
+}
+
+function mapStrings(input: { value: unknown; map: (value: string) => string }): unknown {
+  const { value, map } = input;
+  if (typeof value === "string") return map(value);
+  if (Array.isArray(value)) return value.map((item) => mapStrings({ value: item, map }));
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, mapStrings({ value: item, map })]),
+  );
 }
 
 /** A completed result is evidence of a user response, not an automatic grant.
@@ -231,9 +266,7 @@ function questionAnswers(parts: unknown): { turns: string[]; incomplete: boolean
       incomplete = true;
       continue;
     }
-    const text =
-      "Completed OpenCode question interaction. The assistant authored each question and option label; clicking an option is NOT the user writing its label. Only typedCustomAnswers are user-written text. Selections are scoped to their paired question, never blanket permission: " +
-      JSON.stringify(pairs);
+    const text = questionAnswerPreamble + JSON.stringify(pairs);
     if (text.length > MAX_QUESTION_TURN_CHARS) {
       incomplete = true;
       continue;

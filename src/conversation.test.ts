@@ -195,6 +195,38 @@ describe("bounded conversation", () => {
     expect(resolved.conversation?.turns).toHaveLength(3);
   });
 
+  it("keeps a clicked option whose label has surrounding whitespace a selection", () => {
+    for (const label of ["Yes, push ", " Yes, push", "Yes, push\n"]) {
+      const conversation = conversationFromMessages({
+        messages: [
+          { type: "user", text: "Audit only." },
+          {
+            type: "assistant",
+            content: [
+              {
+                type: "tool",
+                name: "question",
+                state: {
+                  status: "completed",
+                  input: { questions: [{ question: "Push?", options: [{ label }] }] },
+                  metadata: { answers: [[label]] },
+                },
+              },
+            ],
+          },
+        ],
+        generation: "v2",
+        sessionID: "s",
+        includeAssistant: false,
+      });
+      const text = conversation.turns[1]?.text;
+      expect(text, JSON.stringify(label)).toContain(
+        '"selectedAssistantOptionLabels":["Yes, push"]',
+      );
+      expect(text, JSON.stringify(label)).toContain('"typedCustomAnswers":[]');
+    }
+  });
+
   it("includes a typed custom answer, but never fabricates one from assistant text", () => {
     const messages = [
       { type: "user", text: "Audit only." },

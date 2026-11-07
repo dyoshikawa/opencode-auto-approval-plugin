@@ -1,5 +1,5 @@
 // cspell:words apikey pousr glpat
-import type { ConversationContext } from "./conversation.js";
+import { type ConversationContext, mapQuestionAnswerStrings } from "./conversation.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import { isRecord } from "./shared.js";
 
@@ -165,7 +165,7 @@ export class RedactingReviewer implements Reviewer {
   }
 
   async review(input: ReviewRequest): Promise<ReviewVerdict> {
-    return this.#reviewer.review({
+    const verdict = await this.#reviewer.review({
       ...input,
       resource: redactedCopy({ value: input.resource, redact: this.#redact }),
       ...(input.userIntent === undefined ? {} : { userIntent: this.#redact(input.userIntent) }),
@@ -178,6 +178,9 @@ export class RedactingReviewer implements Reviewer {
             }),
           }),
     });
+    // The reason reaches the agent (a tool error) and the audit log; a reviewer
+    // that read a credential must not hand it on there.
+    return { ...verdict, reason: this.#redact(verdict.reason) };
   }
 }
 
@@ -187,7 +190,15 @@ function redactedConversation(input: {
 }): ConversationContext {
   return {
     ...input.conversation,
-    turns: input.conversation.turns.map((turn) => ({ ...turn, text: input.redact(turn.text) })),
+    turns: input.conversation.turns.map((turn) => ({
+      ...turn,
+      // A question-answer turn is JSON-encoded: redact each answer before the
+      // encoding escapes the newlines and quotes the rules look for.
+      text:
+        (turn.source === "question-answer"
+          ? mapQuestionAnswerStrings({ text: turn.text, map: input.redact })
+          : undefined) ?? input.redact(turn.text),
+    })),
   };
 }
 
