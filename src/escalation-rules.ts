@@ -1,4 +1,6 @@
 // cspell:words oldstring newstring patchtext
+import { posix } from "node:path";
+
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import { sanitizeReason } from "./reviewer.js";
 import { isRecord } from "./shared.js";
@@ -128,11 +130,17 @@ function candidatesOf(request: ReviewRequest): string[] | "unchecked" {
   const candidates = new Set<string>();
   let strings = 0;
   let characters = 0;
-  const add = (value: string) => {
-    const folded = normalized(value);
+  const addFolded = (folded: string) => {
     if (folded === "" || candidates.has(folded)) return;
     candidates.add(folded);
     characters += folded.length;
+  };
+  const add = (value: string) => {
+    const folded = normalized(value);
+    addFolded(folded);
+    // The host resolves `.env/.`, `.env/` and `sub/../.env` to `.env`, so a
+    // rule must meet that spelling too.
+    if (folded.includes("/") || folded.includes("\\")) addFolded(canonicalPath(folded));
   };
   const addAll = (value: string) => {
     add(value);
@@ -182,6 +190,16 @@ function withoutContinuations(value: string): string {
 
 function normalized(value: string): string {
   return withoutContinuations(value).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * A path as the host resolves it: backslashes read as separators, `.` and
+ * `..` segments and repeated or trailing slashes removed (the root kept).
+ */
+function canonicalPath(value: string): string {
+  // normalize() leaves at most one trailing slash.
+  const path = posix.normalize(value.replaceAll("\\", "/"));
+  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
 }
 
 /**

@@ -384,6 +384,39 @@ describe("EscalationRulesReviewer", () => {
     );
   });
 
+  it("matches a path spelled in a form the host resolves to the protected file", async () => {
+    const reviewer = new EscalationRulesReviewer({
+      reviewer: permissiveReviewer(),
+      rules: [{ action: "*", resource: "*.env" }],
+    });
+    const spellings = [
+      ".env/.",
+      ".env/",
+      "sub/../.env/.",
+      "a//.env/",
+      "sub\\..\\.env",
+      "/p/.env/.",
+    ];
+    for (const path of spellings) {
+      for (const request of [
+        toolCall("write", { path, content: "X=1" }),
+        toolCall("edit", { filePath: path, oldString: "a", newString: "b" }),
+        toolCall("read", { path }),
+        toolCall("bash", { command: `cat ${path}` }),
+        toolCall("apply_patch", {
+          patchText: `*** Begin Patch\n*** Add File: ${path}\n+X=1\n*** End Patch`,
+        }),
+      ]) {
+        expect((await reviewer.review(request)).verdict, `${request.action} ${path}`).toBe(
+          "escalate",
+        );
+      }
+    }
+    for (const path of ["src/.env/a.ts", ".env/x", "sub/.."]) {
+      expect((await reviewer.review(toolCall("read", { path }))).verdict, path).toBe("allow");
+    }
+  });
+
   it("scans a patch made of line separators in linear time", async () => {
     const reviewer = new EscalationRulesReviewer({
       reviewer: permissiveReviewer(),

@@ -494,10 +494,12 @@ workspace. That state goes to the reviewer's provider, so treat it as sent there
   (GitHub, OpenAI, GitLab, TypeSafe), and a secret-shaped value after `Authorization:` /
   `X-API-Key:` / `Bearer`, a `--password` / `--token`-style flag, or in a `*_KEY=` / `*_TOKEN=` /
   `*_SECRET=` / `*_PASSWORD=`-style assignment. The tool OpenCode runs is never changed, and the
-  reviewer is told what the markers mean. Redaction is deliberately conservative so that crafted
-  text cannot hide a destination, a file or a command from the reviewer: a secret-shaped value is
-  one run of 16 or more letters, digits and `_+=-` (or a JWT), so nothing with a space, a quote,
-  shell syntax, `.`, `/`, `~`, `:` or `@` — no path, host or URL — is ever replaced, and
+  reviewer is told what the markers mean. The reviewer's reason, which the agent can see in a
+  tool error, goes through the same redaction plus the broader audit-log rules. Redaction is
+  deliberately conservative so that crafted text cannot hide a destination, a file or a command
+  from the reviewer: a secret-shaped value is one run of 16 or more letters, digits and `_+=-` (or
+  a JWT), so nothing with a space, a quote, shell syntax, `.`, `/`, `~`, `:` or `@` — no path, host
+  or URL — is ever replaced, and
   `SSH_AUTH_SOCK=` / `*_PATH=` values stay visible. A short password, a secret in another shape, an
   SDK runtime's own key in the environment, or one the reviewer reads from a file still reaches
   the provider, and so does a value in a variable the same text names again (`$NAME`,
@@ -712,17 +714,25 @@ with the matched rule as the reason. Rules are off by default.
   (In `on-ask` mode OpenCode already splits a command line into its commands, so a pattern never
   spans `&&`.) A trailing ` *` also matches the
   bare command. Matching ignores case, shell line continuations and runs of whitespace, in patterns
-  and values alike. It never goes through a regular expression, so it cannot backtrack: the cost
+  and values alike. A value with a `/` or `\` is also matched as the path the host resolves it to
+  (`.` and `..` segments and repeated or trailing slashes removed), so `.env/.` and
+  `sub/../.env` meet `*.env`. It never goes through a regular expression, so it cannot backtrack: the cost
   grows with the value's and the pattern's length. Paths may arrive relative to the project in
-  `on-ask` mode (`.env`) and absolute in `all-tools` mode, so start path patterns with `*`.
+  `on-ask` mode (`.env`) and absolute in `all-tools` mode, so start path patterns with `*` (and
+  write them without `./`).
 - The first matching rule, in configuration order, is the one reported. Escalations from a rule
   are written to the [audit log](#audit-log-opt-in) like any verdict. At most 200 rules; an
   `action` is at most 200 characters and a `resource` at most 1,000.
 - Rules are a deterministic floor, not a sandbox. A shell command can spell the same thing many
   ways (`g""it push`, a variable, a script file, an alias) and a URL can be percent-encoded, which
   no pattern lists. In `on-ask` mode a rule only sees what OpenCode already asks about. The
-  reviewer's own read-only session is not checked against the rules. Keep OpenCode `deny`
-  permissions for what must never run; they stay authoritative whatever the reviewer says.
+  reviewer's own read-only session is not checked against the rules, nor against your OpenCode
+  `read` denies: the default `opencode` runtime may `read` any project file except `*.env` /
+  `*.env.*` (`*.env.example` allowed). That `.env` rule covers `read` only: `grep` searches every
+  file, `.env` included, a symlink to `.env` is read under its own name, and the
+  `claude-agent-sdk` and `codex-sdk` runtimes have no such rule.
+  Keep OpenCode `deny` permissions for what must never run; they stay authoritative whatever the
+  reviewer says.
 - With `allToolsNativeAsks: "review"`, a same-action native ask is answered from the reviewed call,
   which the rules already checked; its own resources are not matched again.
 

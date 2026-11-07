@@ -1,8 +1,9 @@
-// cspell:words Bldmls glpat
+// cspell:words Bldmls glpat QUJDREVGR PUFFSU
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { conversationFromMessages } from "./conversation.js";
 import { RedactingReviewer, redactForReview } from "./redaction.js";
-import type { ReviewRequest } from "./reviewer.js";
+import { type ReviewRequest, reviewerPrompt } from "./reviewer.js";
 
 function recordingReviewer() {
   const requests: ReviewRequest[] = [];
@@ -172,6 +173,114 @@ describe("RedactingReviewer", () => {
       conversation: { turns: [{ role: "user", text: "use [REDACTED_TOKEN]" }] },
     });
     expect(reviewer.isReviewerSession({ sessionID: "s" })).toBe(true);
+  });
+
+  it("redacts a credential typed into a question answer before it is JSON-encoded", async () => {
+    const keyBody = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo";
+    const privateKey = [
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      keyBody,
+      keyBody,
+      "-----END OPENSSH PRIVATE KEY-----",
+    ].join("\n");
+    const answers = [
+      privateKey,
+      'DEPLOY_TOKEN="dummyAssignValue1234567890"',
+      '--password "dummyFlagValue1234567890"',
+    ];
+    const conversation = conversationFromMessages({
+      messages: [
+        { type: "user", text: "Set up the deploy." },
+        {
+          type: "assistant",
+          content: [
+            {
+              type: "tool",
+              name: "question",
+              state: {
+                status: "completed",
+                input: {
+                  questions: answers.map(() => ({
+                    question: "Credential?",
+                    options: [{ label: "skip" }],
+                  })),
+                },
+                metadata: { answers: answers.map((answer) => [answer]) },
+              },
+            },
+          ],
+        },
+      ],
+      generation: "v2",
+      sessionID: "s",
+      includeAssistant: false,
+    });
+    const inner = recordingReviewer();
+    const reviewer = new RedactingReviewer({ reviewer: inner, apiKeys: [], patterns: [] });
+    await reviewer.review({
+      source: "tool-call",
+      sessionID: "s",
+      action: "bash",
+      resource: { command: "./deploy.sh" },
+      conversation,
+    });
+
+    const request = inner.requests[0];
+    if (request === undefined) throw new Error("not reviewed");
+    const prompt = reviewerPrompt({ request, check: "check" });
+    for (const secret of [keyBody, "dummyAssignValue1234567890", "dummyFlagValue1234567890"]) {
+      expect(prompt).not.toContain(secret);
+    }
+    expect(request.conversation?.turns[1]?.text).toContain('"typedCustomAnswers":["[REDACTED');
+    expect(request.conversation?.turns[1]?.text).toContain("Credential?");
+  });
+
+  it("redacts the reviewer's reason before it reaches the agent", async () => {
+    const reviewer = new RedactingReviewer({
+      reviewer: {
+        review: vi.fn(async () => ({
+          verdict: "deny" as const,
+          reason: "the file holds API_KEY=readByTheReviewer123456",
+        })),
+        isReviewerSession: vi.fn(() => false),
+      },
+      apiKeys: [],
+      patterns: [],
+    });
+    const verdict = await reviewer.review({
+      source: "tool-call",
+      sessionID: "s",
+      action: "read",
+      resource: { path: ".env" },
+    });
+    expect(verdict).toEqual({ verdict: "deny", reason: "the file holds API_KEY=[REDACTED]" });
+  });
+
+  it("redacts a cut key block, a short value and a repeated name in the reason", async () => {
+    const reasons = [
+      `key: -----BEGIN OPENSSH PRIVATE KEY----- ${"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo".repeat(8)}`,
+      "PASSWORD=short1 was found",
+      "API_KEY=readByTheReviewer123456 (API_KEY is set)",
+    ];
+    for (const reason of reasons) {
+      const reviewer = new RedactingReviewer({
+        reviewer: {
+          review: vi.fn(async () => ({ verdict: "deny" as const, reason })),
+          isReviewerSession: vi.fn(() => false),
+        },
+        apiKeys: [],
+        patterns: [],
+      });
+      const verdict = await reviewer.review({
+        source: "tool-call",
+        sessionID: "s",
+        action: "read",
+        resource: { path: ".env" },
+      });
+      for (const secret of ["QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo", "short1", "readByTheReviewer"]) {
+        expect(verdict.reason, reason).not.toContain(secret);
+      }
+    }
   });
 
   it("passes values that are not plain data through unchanged", async () => {
