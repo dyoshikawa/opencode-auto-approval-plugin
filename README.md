@@ -494,8 +494,8 @@ workspace. That state goes to the reviewer's provider, so treat it as sent there
   (GitHub, OpenAI, GitLab, TypeSafe), and a secret-shaped value after `Authorization:` /
   `X-API-Key:` / `Bearer`, a `--password` / `--token`-style flag, or in a `*_KEY=` / `*_TOKEN=` /
   `*_SECRET=` / `*_PASSWORD=`-style assignment. The tool OpenCode runs is never changed, and the
-  reviewer is told what the markers mean. The reviewer's reason, which the agent can see in a tool error,
-  goes through the same redaction. Redaction is deliberately conservative so that crafted
+  reviewer is told what the markers mean. The reviewer's reason, which the agent can see in a
+  tool error, goes through the same redaction. Redaction is deliberately conservative so that crafted
   text cannot hide a destination, a file or a command from the reviewer: a secret-shaped value is
   one run of 16 or more letters, digits and `_+=-` (or a JWT), so nothing with a space, a quote,
   shell syntax, `.`, `/`, `~`, `:` or `@` — no path, host or URL — is ever replaced, and
