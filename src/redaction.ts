@@ -153,11 +153,16 @@ function redactInContext(text: string): string {
 export class RedactingReviewer implements Reviewer {
   readonly #reviewer: Reviewer;
   readonly #redact: (text: string) => string;
+  readonly #redactReason: (text: string) => string;
 
   constructor(input: { reviewer: Reviewer; apiKeys: string[]; patterns: RegExp[] }) {
     this.#reviewer = input.reviewer;
     this.#redact = (text) =>
       redactForReview({ text, apiKeys: input.apiKeys, patterns: input.patterns });
+    // The reason is output, never judged, so the generous log rules apply on
+    // top: a key block cut at the 300-character limit, a short or quoted value.
+    this.#redactReason = (text) =>
+      redactSecrets({ text: this.#redact(text), apiKeys: input.apiKeys });
   }
 
   isReviewerSession(input: { sessionID: string }): boolean {
@@ -180,7 +185,7 @@ export class RedactingReviewer implements Reviewer {
     });
     // The reason reaches the agent (a tool error) and the audit log; a reviewer
     // that read a credential must not hand it on there.
-    return { ...verdict, reason: this.#redact(verdict.reason) };
+    return { ...verdict, reason: this.#redactReason(verdict.reason) };
   }
 }
 

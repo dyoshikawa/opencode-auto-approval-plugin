@@ -256,6 +256,33 @@ describe("RedactingReviewer", () => {
     expect(verdict).toEqual({ verdict: "deny", reason: "the file holds API_KEY=[REDACTED]" });
   });
 
+  it("redacts a cut key block, a short value and a repeated name in the reason", async () => {
+    const reasons = [
+      `key: -----BEGIN OPENSSH PRIVATE KEY----- ${"QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo".repeat(8)}`,
+      "PASSWORD=short1 was found",
+      "API_KEY=readByTheReviewer123456 (API_KEY is set)",
+    ];
+    for (const reason of reasons) {
+      const reviewer = new RedactingReviewer({
+        reviewer: {
+          review: vi.fn(async () => ({ verdict: "deny" as const, reason })),
+          isReviewerSession: vi.fn(() => false),
+        },
+        apiKeys: [],
+        patterns: [],
+      });
+      const verdict = await reviewer.review({
+        source: "tool-call",
+        sessionID: "s",
+        action: "read",
+        resource: { path: ".env" },
+      });
+      for (const secret of ["QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo", "short1", "readByTheReviewer"]) {
+        expect(verdict.reason, reason).not.toContain(secret);
+      }
+    }
+  });
+
   it("passes values that are not plain data through unchanged", async () => {
     const inner = recordingReviewer();
     const reviewer = new RedactingReviewer({ reviewer: inner, apiKeys: [], patterns: [] });

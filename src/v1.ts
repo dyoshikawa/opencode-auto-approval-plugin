@@ -112,6 +112,7 @@ export function reviewerAgentConfig(): Record<string, unknown> {
     permission: {
       "*": "deny",
       ...Object.fromEntries(reviewerAllowedTools.map((tool) => [tool, "allow"])),
+      // Replaces the plain `read: "allow"` above with the host's `.env` rules.
       read: { "*": "allow", ...Object.fromEntries(reviewerEnvReadRules) },
       edit: "deny",
       bash: "deny",

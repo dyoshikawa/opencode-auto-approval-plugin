@@ -717,7 +717,8 @@ with the matched rule as the reason. Rules are off by default.
   (`.` and `..` segments and repeated or trailing slashes removed), so `.env/.` and
   `sub/../.env` meet `*.env`. It never goes through a regular expression, so it cannot backtrack: the cost
   grows with the value's and the pattern's length. Paths may arrive relative to the project in
-  `on-ask` mode (`.env`) and absolute in `all-tools` mode, so start path patterns with `*`.
+  `on-ask` mode (`.env`) and absolute in `all-tools` mode, so start path patterns with `*` (and
+  write them without `./`).
 - The first matching rule, in configuration order, is the one reported. Escalations from a rule
   are written to the [audit log](#audit-log-opt-in) like any verdict. At most 200 rules; an
   `action` is at most 200 characters and a `resource` at most 1,000.
@@ -726,8 +727,10 @@ with the matched rule as the reason. Rules are off by default.
   no pattern lists. In `on-ask` mode a rule only sees what OpenCode already asks about. The
   reviewer's own read-only session is not checked against the rules, nor against your OpenCode
   `read` denies: the default `opencode` runtime may `read` any project file except `*.env` /
-  `*.env.*` (`*.env.example` allowed), and `grep` searches every file. Keep OpenCode `deny`
-  permissions for what must never run; they stay authoritative whatever the reviewer says.
+  `*.env.*` (`*.env.example` allowed). That `.env` rule covers `read` only: `grep` searches every
+  file, `.env` included, and the `claude-agent-sdk` and `codex-sdk` runtimes have no such rule.
+  Keep OpenCode `deny` permissions for what must never run; they stay authoritative whatever the
+  reviewer says.
 - With `allToolsNativeAsks: "review"`, a same-action native ask is answered from the reviewed call,
   which the rules already checked; its own resources are not matched again.
 
