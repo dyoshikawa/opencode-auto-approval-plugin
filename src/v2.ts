@@ -7,6 +7,7 @@ import {
   reviewerAgentName,
   reviewerAgentPrompt,
   reviewerAllowedTools,
+  reviewerEnvReadRules,
 } from "./agent-reviewer.js";
 import type { ModelReference } from "./config.js";
 import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
@@ -80,7 +81,11 @@ function fromModelRef(
     : undefined;
 }
 
-/** Everything denied except the read-only tools; last matching rule wins. */
+/**
+ * Everything denied except the read-only tools; last matching rule wins.
+ * These rules replace the host's defaults, so its `.env` read ask is kept as
+ * a deny: the reviewer has no reason to read a credential file.
+ */
 const reviewerPermissions = [
   { action: "*", resource: "*", effect: "deny" as const },
   ...reviewerAllowedTools.map((tool) => ({
@@ -88,6 +93,7 @@ const reviewerPermissions = [
     resource: "*",
     effect: "allow" as const,
   })),
+  ...reviewerEnvReadRules.map(([resource, effect]) => ({ action: "read", resource, effect })),
 ];
 
 export function createV2SessionClient(context: Context): ReviewSessionClient {

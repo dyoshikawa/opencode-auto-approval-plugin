@@ -494,7 +494,8 @@ workspace. That state goes to the reviewer's provider, so treat it as sent there
   (GitHub, OpenAI, GitLab, TypeSafe), and a secret-shaped value after `Authorization:` /
   `X-API-Key:` / `Bearer`, a `--password` / `--token`-style flag, or in a `*_KEY=` / `*_TOKEN=` /
   `*_SECRET=` / `*_PASSWORD=`-style assignment. The tool OpenCode runs is never changed, and the
-  reviewer is told what the markers mean. Redaction is deliberately conservative so that crafted
+  reviewer is told what the markers mean. The reviewer's reason, which the agent can see in a tool error,
+  goes through the same redaction. Redaction is deliberately conservative so that crafted
   text cannot hide a destination, a file or a command from the reviewer: a secret-shaped value is
   one run of 16 or more letters, digits and `_+=-` (or a JWT), so nothing with a space, a quote,
   shell syntax, `.`, `/`, `~`, `:` or `@` — no path, host or URL — is ever replaced, and
@@ -712,7 +713,9 @@ with the matched rule as the reason. Rules are off by default.
   (In `on-ask` mode OpenCode already splits a command line into its commands, so a pattern never
   spans `&&`.) A trailing ` *` also matches the
   bare command. Matching ignores case, shell line continuations and runs of whitespace, in patterns
-  and values alike. It never goes through a regular expression, so it cannot backtrack: the cost
+  and values alike. A value with a `/` or `\` is also matched as the path the host resolves it to
+  (`.` and `..` segments and repeated or trailing slashes removed), so `.env/.` and
+  `sub/../.env` meet `*.env`. It never goes through a regular expression, so it cannot backtrack: the cost
   grows with the value's and the pattern's length. Paths may arrive relative to the project in
   `on-ask` mode (`.env`) and absolute in `all-tools` mode, so start path patterns with `*`.
 - The first matching rule, in configuration order, is the one reported. Escalations from a rule
@@ -721,7 +724,9 @@ with the matched rule as the reason. Rules are off by default.
 - Rules are a deterministic floor, not a sandbox. A shell command can spell the same thing many
   ways (`g""it push`, a variable, a script file, an alias) and a URL can be percent-encoded, which
   no pattern lists. In `on-ask` mode a rule only sees what OpenCode already asks about. The
-  reviewer's own read-only session is not checked against the rules. Keep OpenCode `deny`
+  reviewer's own read-only session is not checked against the rules, nor against your OpenCode
+  `read` denies: the default `opencode` runtime may `read` any project file except `*.env` /
+  `*.env.*` (`*.env.example` allowed), and `grep` searches every file. Keep OpenCode `deny`
   permissions for what must never run; they stay authoritative whatever the reviewer says.
 - With `allToolsNativeAsks: "review"`, a same-action native ask is answered from the reviewed call,
   which the rules already checked; its own resources are not matched again.

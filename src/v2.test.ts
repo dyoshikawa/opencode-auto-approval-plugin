@@ -173,6 +173,9 @@ describe("V2 plugin (opencode 2.x)", () => {
         { action: "glob", resource: "*", effect: "allow" },
         { action: "grep", resource: "*", effect: "allow" },
         { action: "lsp", resource: "*", effect: "allow" },
+        { action: "read", resource: "*.env", effect: "deny" },
+        { action: "read", resource: "*.env.*", effect: "deny" },
+        { action: "read", resource: "*.env.example", effect: "allow" },
       ],
     });
   });
@@ -859,6 +862,9 @@ describe("V2 session client", () => {
         { action: "glob", resource: "*", effect: "allow" },
         { action: "grep", resource: "*", effect: "allow" },
         { action: "lsp", resource: "*", effect: "allow" },
+        { action: "read", resource: "*.env", effect: "deny" },
+        { action: "read", resource: "*.env.*", effect: "deny" },
+        { action: "read", resource: "*.env.example", effect: "allow" },
       ],
       model: { providerID: "openai", id: "gpt-5.6" },
     });
@@ -900,6 +906,9 @@ describe("V2 session client", () => {
         { action: "glob", resource: "*", effect: "allow" },
         { action: "grep", resource: "*", effect: "allow" },
         { action: "lsp", resource: "*", effect: "allow" },
+        { action: "read", resource: "*.env", effect: "deny" },
+        { action: "read", resource: "*.env.*", effect: "deny" },
+        { action: "read", resource: "*.env.example", effect: "allow" },
       ],
     });
   });

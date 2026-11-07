@@ -217,7 +217,12 @@ describe("V1 plugin (opencode 1.x)", () => {
     expect(reviewerAgentConfig()).toMatchObject({
       mode: "subagent",
       tools: { read: true, glob: true, grep: true, lsp: true },
-      permission: { "*": "deny", read: "allow", edit: "deny", bash: "deny" },
+      permission: {
+        "*": "deny",
+        read: { "*": "allow", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow" },
+        edit: "deny",
+        bash: "deny",
+      },
     });
   });
 

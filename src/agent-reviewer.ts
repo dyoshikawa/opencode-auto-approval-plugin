@@ -25,6 +25,16 @@ export const reviewerAgentPrompt = [
 /** The only tools the reviewer may call; everything else is denied. */
 export const reviewerAllowedTools = ["read", "glob", "grep", "lsp"] as const;
 
+/**
+ * The host's default `.env` read rules, with its ask turned into a deny
+ * (nobody answers the reviewer's asks); in order, last matching rule wins.
+ */
+export const reviewerEnvReadRules = [
+  ["*.env", "deny"],
+  ["*.env.*", "deny"],
+  ["*.env.example", "allow"],
+] as const;
+
 export class AgentReviewer implements Reviewer {
   readonly #client: ReviewSessionClient;
   readonly #configuration: PluginConfiguration;

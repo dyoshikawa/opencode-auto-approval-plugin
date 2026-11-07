@@ -5,6 +5,7 @@ import {
   reviewerAgentName,
   reviewerAgentPrompt,
   reviewerAllowedTools,
+  reviewerEnvReadRules,
 } from "./agent-reviewer.js";
 import type { ModelReference, PluginConfiguration } from "./config.js";
 import { invalidOptions, usesAgentReviewer, parsePluginConfiguration } from "./config.js";
@@ -111,6 +112,7 @@ export function reviewerAgentConfig(): Record<string, unknown> {
     permission: {
       "*": "deny",
       ...Object.fromEntries(reviewerAllowedTools.map((tool) => [tool, "allow"])),
+      read: { "*": "allow", ...Object.fromEntries(reviewerEnvReadRules) },
       edit: "deny",
       bash: "deny",
       task: "deny",
