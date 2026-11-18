@@ -9,6 +9,7 @@ import { DecisionReviewer } from "./decision-reviewer.js";
 import { EscalationRulesReviewer } from "./escalation-rules.js";
 import { OversizeFallbackReviewer } from "./fallback-reviewer.js";
 import { RedactingReviewer } from "./redaction.js";
+import { RetryingReviewer } from "./retrying-reviewer.js";
 import type { Reviewer } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { fileUsageRecorder, projectID, usageLogPath } from "./usage.js";
@@ -17,7 +18,14 @@ import { createV2Plugin } from "./v2.js";
 
 const defaultDependencies: PluginDependencies = {
   createReviewer: (input) => {
-    const backend = boundedReviewer({ reviewer: backendReviewer(input), input });
+    const attempts = input.configuration.reviewer.maxReviewAttempts;
+    const backend = boundedReviewer({
+      reviewer:
+        attempts > 1
+          ? new RetryingReviewer({ reviewer: backendReviewer(input), maxAttempts: attempts })
+          : backendReviewer(input),
+      input,
+    });
     const rules = input.configuration.escalate;
     // Inside the audit log, so a rule's escalation is recorded like a verdict;
     // outside redaction, so rules match the operation as it would run.

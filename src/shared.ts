@@ -11,6 +11,36 @@ export type PluginDependencies = {
 };
 
 /**
+ * What an on-ask review settled to, before the ask policy decides its effect.
+ * A reviewer failure is one outcome, not an absence: a policy that settles
+ * unapproved asks has to settle those too.
+ */
+export type AskOutcome =
+  | { kind: "allow"; verdict: ReviewVerdict & { verdict: "allow" } }
+  | { kind: "unapproved"; verdict: ReviewVerdict & { verdict: "deny" | "escalate" } }
+  | { kind: "failed"; error: unknown };
+
+/**
+ * Runs one ask review and reports what it settled to. The caller applies the
+ * configured ask policy; `reviewForApproval` is that policy when only an
+ * `allow` is acted on.
+ */
+export async function reviewAsk(input: {
+  reviewer: Pick<Reviewer, "review">;
+  request: ReviewRequest;
+}): Promise<AskOutcome> {
+  try {
+    const verdict = await input.reviewer.review(input.request);
+    if (verdict.verdict === "allow") {
+      return { kind: "allow", verdict: { ...verdict, verdict: "allow" } };
+    }
+    return { kind: "unapproved", verdict: { ...verdict, verdict: verdict.verdict } };
+  } catch (error) {
+    return { kind: "failed", error };
+  }
+}
+
+/**
  * `on-ask` semantics shared by both plugin generations: only an explicit
  * `allow` verdict is acted on; `deny`, `escalate` and any reviewer failure
  * leave the human permission prompt in place.
@@ -19,12 +49,8 @@ export async function reviewForApproval(input: {
   reviewer: Pick<Reviewer, "review">;
   request: ReviewRequest;
 }): Promise<ReviewVerdict | undefined> {
-  try {
-    const decision = await input.reviewer.review(input.request);
-    return decision.verdict === "allow" ? decision : undefined;
-  } catch {
-    return undefined;
-  }
+  const outcome = await reviewAsk(input);
+  return outcome.kind === "allow" ? outcome.verdict : undefined;
 }
 
 /**

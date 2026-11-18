@@ -88,6 +88,8 @@ describe("parsePluginConfiguration", () => {
     expect(parsePluginConfiguration({ options: {}, env: {} })).toEqual({
       mode: "on-ask",
       allToolsNativeAsks: "preserve",
+      unapprovedAsk: "prompt",
+      nonexistentPath: "review",
       auditLog: { enabled: false, includeCommand: false },
       conversation: { enabled: false, includeAssistant: false },
       escalate: [],
@@ -97,9 +99,41 @@ describe("parsePluginConfiguration", () => {
         timeoutMs: 30_000,
         recordUsage: true,
         maxConcurrentReviews: 4,
+        maxReviewAttempts: 1,
         redact: { enabled: true, patterns: [] },
       },
     });
+  });
+
+  it("settles unapproved asks and guards missing paths only when told to", () => {
+    const configuration = parsePluginConfiguration({
+      options: { unapprovedAsk: "reject", nonexistentPath: "deny" },
+      env: {},
+    });
+    expect(configuration.unapprovedAsk).toBe("reject");
+    expect(configuration.nonexistentPath).toBe("deny");
+    expect(() => parsePluginConfiguration({ options: { unapprovedAsk: "drop" }, env: {} })).toThrow(
+      "Invalid auto-approval plugin options",
+    );
+    expect(() =>
+      parsePluginConfiguration({ options: { nonexistentPath: "guess" }, env: {} }),
+    ).toThrow("Invalid auto-approval plugin options");
+  });
+
+  it("retries a review only within its configured attempts", () => {
+    expect(
+      parsePluginConfiguration({
+        options: { reviewer: { maxReviewAttempts: 3 } },
+        env: {},
+      }).reviewer.maxReviewAttempts,
+    ).toBe(3);
+    // A retry count below one would settle every ask without a review.
+    expect(() =>
+      parsePluginConfiguration({ options: { reviewer: { maxReviewAttempts: 0 } }, env: {} }),
+    ).toThrow("Invalid auto-approval plugin options");
+    expect(() =>
+      parsePluginConfiguration({ options: { reviewer: { maxReviewAttempts: 6 } }, env: {} }),
+    ).toThrow("Invalid auto-approval plugin options");
   });
 
   it("accepts an independent reviewer model", () => {
@@ -116,6 +150,8 @@ describe("parsePluginConfiguration", () => {
     ).toEqual({
       mode: "all-tools",
       allToolsNativeAsks: "preserve",
+      unapprovedAsk: "prompt",
+      nonexistentPath: "review",
       auditLog: { enabled: false, includeCommand: false },
       conversation: { enabled: false, includeAssistant: false },
       escalate: [],
@@ -130,6 +166,7 @@ describe("parsePluginConfiguration", () => {
         timeoutMs: 12_000,
         recordUsage: true,
         maxConcurrentReviews: 4,
+        maxReviewAttempts: 1,
         redact: { enabled: true, patterns: [] },
       },
     });
@@ -1362,6 +1399,7 @@ describe("parsePluginConfiguration", () => {
         timeoutMs: 30_000,
         recordUsage: true,
         maxConcurrentReviews: 4,
+        maxReviewAttempts: 1,
         redact: { enabled: true, patterns: [] },
         decision: {
           provider: "typesafe",
