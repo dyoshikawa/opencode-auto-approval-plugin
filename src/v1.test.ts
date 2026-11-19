@@ -42,6 +42,20 @@ describe("V1 plugin (opencode 1.x)", () => {
     ).rejects.toThrow('allToolsNativeAsks "review" needs OpenCode 2.x.');
   });
 
+  it("rejects ask settlement and the path guard, which V1 cannot do", async () => {
+    const { context } = createContext();
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await expect(plugin(context as never, { unapprovedAsk: "reject" })).rejects.toThrow(
+      'unapprovedAsk "reject" needs OpenCode 2.x.',
+    );
+    await expect(plugin(context as never, { nonexistentPath: "deny" })).rejects.toThrow(
+      'nonexistentPath "deny" needs OpenCode 2.x.',
+    );
+    await expect(
+      plugin(context as never, { unapprovedAsk: "prompt", nonexistentPath: "review" }),
+    ).resolves.toBeDefined();
+  });
+
   it("rejects reviewer session cleanup, which V1 cannot do", async () => {
     const { context } = createContext();
     const { plugin } = createPlugin({ verdict: "allow" });

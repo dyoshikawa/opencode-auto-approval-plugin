@@ -1,5 +1,9 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vite-plus/test";
 
+import { testProjectDirectory } from "./test-directory.js";
 import { createV2Plugin, createV2SessionClient } from "./v2.js";
 
 type ReviewerVerdict = "allow" | "deny" | "escalate";
@@ -76,7 +80,7 @@ function createPlugin(input: { verdict: ReviewerVerdict }) {
 }
 
 function askEvent(overrides: Record<string, unknown> = {}) {
-  return {
+  const event: Record<string, unknown> & { effect: string; message?: string } = {
     sessionID: "session-1",
     action: "bash",
     resources: ["git push"],
@@ -84,6 +88,7 @@ function askEvent(overrides: Record<string, unknown> = {}) {
     effect: "ask",
     ...overrides,
   };
+  return event;
 }
 
 function shellCall(id: string) {
@@ -463,6 +468,15 @@ describe("V2 plugin (opencode 2.x)", () => {
 
     expect(hooks["permission.evaluate"]).toBeUndefined();
     expect(hooks["tool.execute.before"]).toBeDefined();
+  });
+
+  it("does not register the tool hook in on-ask mode", async () => {
+    const { context, hooks } = createContext({ options: { mode: "on-ask" } });
+    const { plugin } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+
+    expect(hooks["permission.evaluate"]).toBeDefined();
+    expect(hooks["tool.execute.before"]).toBeUndefined();
   });
 
   it("only bridges native asks with explicit V2 opt-in", async () => {
@@ -964,5 +978,206 @@ describe("V2 session client", () => {
     await client.abort({ sessionID: "review-session" });
 
     expect(session.interrupt).toHaveBeenCalledWith({ sessionID: "review-session" });
+  });
+});
+
+/** A project directory the path guard resolves an ask's targets against. */
+function projectContext(options: Record<string, unknown>, verdict: ReviewerVerdict) {
+  const project = testProjectDirectory();
+  const created = createContext({ options });
+  created.context.location.directory = project;
+  const { plugin, review } = createPlugin({ verdict });
+  return {
+    ...created,
+    project,
+    plugin,
+    review,
+  };
+}
+
+describe("V2 path guard and ask policy", () => {
+  it("leaves a denied ask with the human by default", async () => {
+    const { context, hooks } = createContext();
+    const { plugin } = createPlugin({ verdict: "deny" });
+    await plugin.setup(context as never);
+
+    const event = askEvent();
+    await hooks["permission.evaluate"]?.(event);
+
+    expect(event.effect).toBe("ask");
+    expect(event.message).toBeUndefined();
+  });
+
+  it("rejects a denied ask with the reviewer's reason when told to settle", async () => {
+    const { context, hooks } = createContext({ options: { unapprovedAsk: "reject" } });
+    const review = vi.fn(async () => ({
+      verdict: "deny",
+      reason: "writes outside the repo `src`",
+    }));
+    const plugin = createV2Plugin({
+      createReviewer: () => ({ review, isReviewerSession: () => false }) as never,
+    });
+    await plugin.setup(context as never);
+
+    const event = askEvent();
+    await hooks["permission.evaluate"]?.(event);
+
+    expect(event.effect).toBe("deny");
+    expect(event.message).toContain(
+      'Auto-approval reviewer rejected this "bash" permission request',
+    );
+    // One line, and a backtick from the reviewer cannot close the code span.
+    expect(event.message).toContain("writes outside the repo 'src'");
+  });
+
+  it("names an escalation as a request for a human that was settled without one", async () => {
+    const { context, hooks } = createContext({ options: { unapprovedAsk: "reject" } });
+    const { plugin } = createPlugin({ verdict: "escalate" });
+    await plugin.setup(context as never);
+
+    const event = askEvent();
+    await hooks["permission.evaluate"]?.(event);
+
+    expect(event.effect).toBe("deny");
+    expect(event.message).toContain("requires human review");
+  });
+
+  it("rejects an ask whose review failed when told to settle", async () => {
+    const { context, hooks } = createContext({ options: { unapprovedAsk: "reject" } });
+    const review = vi.fn(async () => {
+      throw new Error("provider down");
+    });
+    const plugin = createV2Plugin({
+      createReviewer: () => ({ review, isReviewerSession: () => false }) as never,
+    });
+    await plugin.setup(context as never);
+
+    const event = askEvent();
+    await hooks["permission.evaluate"]?.(event);
+
+    expect(event.effect).toBe("deny");
+    expect(event.message).toContain("Auto-approval review was unavailable");
+    expect(event.message).toContain("provider down");
+  });
+
+  it("denies an ask whose every target is missing without starting a review", async () => {
+    const { context, hooks, project, plugin, review } = projectContext(
+      { nonexistentPath: "deny" },
+      "allow",
+    );
+    try {
+      await plugin.setup(context as never);
+
+      const event = askEvent({ action: "read", resources: ["src/missing.ts"] });
+      await hooks["permission.evaluate"]?.(event);
+
+      expect(event.effect).toBe("deny");
+      expect(event.message).toContain(join(project, "src/missing.ts"));
+      expect(review).not.toHaveBeenCalled();
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("reviews an ask whose target exists", async () => {
+    const { context, hooks, project, plugin, review } = projectContext(
+      { nonexistentPath: "deny" },
+      "allow",
+    );
+    try {
+      mkdirSync(join(project, "src"));
+      writeFileSync(join(project, "src/here.ts"), "x");
+      await plugin.setup(context as never);
+
+      const event = askEvent({ action: "read", resources: ["src/here.ts"] });
+      await hooks["permission.evaluate"]?.(event);
+
+      expect(review).toHaveBeenCalledTimes(1);
+      expect(event.effect).toBe("allow");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps reviewing a missing target unless the guard is enabled", async () => {
+    const { context, hooks, project, plugin, review } = projectContext({}, "allow");
+    try {
+      await plugin.setup(context as never);
+
+      const event = askEvent({ action: "read", resources: ["src/missing.ts"] });
+      await hooks["permission.evaluate"]?.(event);
+
+      expect(review).toHaveBeenCalledTimes(1);
+      expect(event.effect).toBe("allow");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("denies an all-tools call whose target is missing without starting a review", async () => {
+    const { context, hooks, project, plugin, review } = projectContext(
+      { mode: "all-tools", nonexistentPath: "deny" },
+      "allow",
+    );
+    try {
+      await plugin.setup(context as never);
+
+      await expect(
+        hooks["tool.execute.before"]?.({
+          sessionID: "session-1",
+          agent: "build",
+          messageID: "msg-1",
+          id: "call-1",
+          tool: "read",
+          input: { filePath: "src/missing.ts" },
+        }),
+      ).rejects.toThrow("the path does not exist");
+      expect(review).not.toHaveBeenCalled();
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("still reviews an all-tools call whose target exists", async () => {
+    const { context, hooks, project, plugin, review } = projectContext(
+      { mode: "all-tools", nonexistentPath: "deny" },
+      "allow",
+    );
+    try {
+      mkdirSync(join(project, "src"));
+      writeFileSync(join(project, "src/here.ts"), "x");
+      await plugin.setup(context as never);
+
+      await hooks["tool.execute.before"]?.({
+        sessionID: "session-1",
+        agent: "build",
+        messageID: "msg-1",
+        id: "call-1",
+        tool: "read",
+        input: { filePath: "src/here.ts" },
+      });
+
+      expect(review).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("guards a native ask outside on-ask too", async () => {
+    const { context, hooks, project, plugin, review } = projectContext(
+      { mode: "all-tools", allToolsNativeAsks: "review", nonexistentPath: "deny" },
+      "allow",
+    );
+    try {
+      await plugin.setup(context as never);
+
+      const event = askEvent({ action: "external_directory", resources: ["/nowhere/file.txt"] });
+      await hooks["permission.evaluate"]?.(event);
+
+      expect(event.effect).toBe("deny");
+      expect(review).not.toHaveBeenCalled();
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
   });
 });

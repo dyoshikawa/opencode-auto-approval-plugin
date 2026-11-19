@@ -950,6 +950,82 @@ or chat backend escalates unless a fallback is configured (see above).
 Explicit OpenCode `deny` rules always remain in effect. The plugin is an additional review layer;
 it never turns a built-in deny into an allow.
 
+### Settling unapproved asks (V2 opt-in)
+
+In `on-ask`, anything other than an `allow` verdict leaves OpenCode's human permission prompt in
+place (above). A run where nobody can answer it — OpenCode inside a GitHub Actions workflow, for
+example — would wait there. `unapprovedAsk: "reject"` settles the ask instead: the request is
+denied, and the reviewer's reason is attached as the permission message, so the requesting session
+reads why the call was refused at the denial site and its turn continues.
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": { "unapprovedAsk": "reject" },
+    },
+  ],
+}
+```
+
+A review that produced no verdict settles the same way, with the failure as its reason, so a
+transient reviewer outage cannot leave an ask pending. The reason is reviewer output: it is reduced
+to a single line, its backticks are neutralized and it is capped at 300 characters before it becomes
+the message. The default stays `prompt`: an operation the reviewer does not approve remains the
+person's decision whenever a person is there. OpenCode 1.x rejects the option at startup, because
+only the V2 `permission.evaluate` hook can settle an ask.
+
+### Nonexistent-path denial (V2 opt-in)
+
+`nonexistentPath: "deny"` refuses a `read`, `external_directory`, `grep` or `glob` operation whose
+every targeted path is missing, without starting a reviewer session, and names the path in the
+message. An operation like that can only end in a tool error, so a review would spend a session to
+reach the same answer. The guard is an early automated answer, not a review outcome: it runs before
+any reviewer and independently of `mode` — the permission ask is denied in both modes, and in
+`all-tools` the tool call itself is blocked.
+
+- A `read` ask targets its resources and a `read` call its `filePath`; an `external_directory` ask
+  targets its resolved targets; a `grep` or `glob` ask targets its anchor (`metadata.path`) and a
+  call its `path` argument — never the query pattern.
+- The denial fires only when every target is missing. One existing path keeps the review, as do a
+  glob-shaped target and a stat failure that is not a missing file (permissions, a symlink loop, a
+  malformed path), so the guard cannot deny an operation the reviewer would have judged.
+- `edit` and `write` are never guarded: a target that does not exist yet is the normal
+  create-the-file flow.
+- The default stays `review`. OpenCode 1.x rejects the option at startup.
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": { "nonexistentPath": "deny", "unapprovedAsk": "reject" },
+    },
+  ],
+}
+```
+
+### Review attempts
+
+`reviewer.maxReviewAttempts` (1–5, default `1`) runs a failed review again before its failure
+settles the ask. Every backend starts a fresh session or request per review, so a retry never nudges
+a session that already failed: an aborted, timed-out or unreadable review is retried from scratch.
+An operation too large for its backend is not retried — the fallback, where one is configured, has
+already run by then. Raising this matters most with [`unapprovedAsk: "reject"`](#settling-unapproved-asks-v2-opt-in),
+where a transient failure would otherwise reject the operation.
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "opencode-auto-approval-plugin",
+      "options": { "reviewer": { "maxReviewAttempts": 2 } },
+    },
+  ],
+}
+```
+
 ## Toolchain
 
 | Area              | Tool                                                                                | Config                                                      |

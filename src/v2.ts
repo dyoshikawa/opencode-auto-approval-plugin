@@ -12,6 +12,8 @@ import {
 import type { ModelReference } from "./config.js";
 import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
 import { conversationFromMessages, readConversation } from "./conversation.js";
+import { missingTarget, targetedPaths, toolTargets } from "./path-guard.js";
+import { sanitizeReason } from "./reviewer.js";
 import type { ReviewSessionClient } from "./reviewer.js";
 import {
   createIntentTracker,
@@ -19,7 +21,7 @@ import {
   parentIdentifier,
 } from "./session-root.js";
 import type { PluginDependencies } from "./shared.js";
-import { reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
+import { reviewAsk, reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
 
 /**
  * V2 plugin API (opencode 2.x, `@opencode/plugin`): a `setup(context)` entrypoint
@@ -30,7 +32,63 @@ import { reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
 
 const pluginID = "opencode-auto-approval-plugin";
 
+/**
+ * The reason as an inert quoted span. A reason is model output, so one
+ * backtick in it must not close the span and let the rest of the text read as
+ * instruction, and a newline must not break the single-line message.
+ */
+function quotedReason(input: string): string {
+  return `\`${sanitizeReason(input).replaceAll("`", "'")}\``;
+}
+
+/**
+ * The message a settled ask carries to the requesting session. The rejection
+ * explains itself at the denial site, where the requesting session reads it as
+ * the denied call's feedback instead of guessing why the call failed.
+ */
+function rejectedAskMessage(input: {
+  action: string;
+  verdict: "deny" | "escalate";
+  reason: string;
+}): string {
+  // An escalation is not a judgement against the operation: the reviewer asked
+  // for a human, and the ask policy settled it without one.
+  const frame =
+    input.verdict === "deny"
+      ? `Auto-approval reviewer rejected this "${input.action}" permission request`
+      : `Auto-approval reviewer requires human review for this "${input.action}" permission request, so it was rejected`;
+  return `${frame}: ${quotedReason(input.reason)}`;
+}
+
+/** The message a rejected ask carries when the review produced no verdict. */
+function failedReviewMessage(input: { action: string; error: unknown }): string {
+  const cause = input.error instanceof Error ? input.error.message : String(input.error);
+  return `Auto-approval review was unavailable, so this "${input.action}" permission request was rejected: ${quotedReason(cause)}`;
+}
+
+/** The message the path guard denies with; no reviewer ran, and the target is gone. */
+function nonexistentPathMessage(input: { action: string; path: string }): string {
+  return `Auto-approval denied the "${input.action}" operation for ${quotedReason(input.path)} without a review: the path does not exist. Check the path and retry with one that exists.`;
+}
+
 type Context = Plugin.Context;
+
+/** The permission-ask fields the plugin's ask handling reads. */
+type AskRequest = {
+  readonly action: string;
+  readonly sessionID: string;
+  readonly resources: ReadonlyArray<string>;
+  readonly metadata?: Record<string, unknown>;
+};
+
+/** A native ask raised by a tool call that was already reviewed. */
+type NativeAskRequest = AskRequest & {
+  readonly agent?: string;
+  readonly source?: { readonly type: string; readonly messageID: string; readonly id: string };
+};
+
+/** What an ask settles to, applied to the live event by the caller. */
+type AskSettlement = { effect: "allow" | "deny"; message: string };
 
 /** One reviewed invocation, not a session-wide or agent-wide approval. */
 function grantKey(input: { sessionID: string; messageID: string; id: string }): string {
@@ -207,29 +265,6 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         }
       };
 
-      if (configuration.mode === "on-ask") {
-        await context.permission.hook("evaluate", async (event) => {
-          if (event.effect !== "ask" || isReviewer(event)) return;
-
-          const intent = await tracker.begin(event.sessionID);
-          const decision = await reviewForApproval({
-            reviewer,
-            request: {
-              source: "permission-request",
-              sessionID: event.sessionID,
-              action: event.action,
-              resource: { resources: event.resources, metadata: event.metadata },
-              ...(await intent.context()),
-              model: await sessionModel(event.sessionID),
-            },
-          });
-          if (decision === undefined || intent.changed()) return;
-          event.effect = "allow";
-          event.message = decision.reason;
-        });
-        return;
-      }
-
       // Opt-in only. By default a native "ask" remains a mandatory human checkpoint.
       // V1 has no matching permission bridge and rejects the option at startup.
       const nativeGrants = new Map<
@@ -246,64 +281,171 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       >();
       const grantLifetimeMs = 45_000;
 
-      if (configuration.allToolsNativeAsks === "review") {
-        await context.permission.hook("evaluate", async (event) => {
-          if (event.effect !== "ask" || event.source?.type !== "tool" || isReviewer(event)) return;
-          const key = grantKey({
-            sessionID: event.sessionID,
-            messageID: event.source.messageID,
-            id: event.source.id,
-          });
-          const grant = nativeGrants.get(key);
-          if (!grant || grant.agent !== event.agent) return;
-          // A later execute.before hook (another plugin, or core's input
-          // repair) may have rewritten the call after it was reviewed; the
-          // native ask then stays with a human before the tool runs.
-          if (Date.now() >= grant.expiresAt || grant.intent.changed() || !unchanged(grant)) {
-            nativeGrants.delete(key);
-            return;
-          }
+      const guardsMissingPath = configuration.nonexistentPath === "deny";
+      const reviewsAsks = configuration.mode === "on-ask";
+      const reviewsNativeAsks =
+        configuration.mode === "all-tools" && configuration.allToolsNativeAsks === "review";
 
-          if (event.action === grant.tool) {
-            // The reviewer examined this tool's input. An unrelated permission
-            // action cannot inherit this grant, even with the same call ID.
-            // The ask's resources are not compared with that input: a tool
-            // that resolves its own resources at run time is trusted to
-            // derive them from the reviewed input (see README).
-            event.effect = "allow";
-            event.message = "Approved by auto-review for this tool invocation.";
-            return;
-          }
-
-          // Resolve extra native asks separately using their ACTUAL resources.
-          // Especially important for external_directory, where symlinks may
-          // resolve outside the path visible in the reviewed tool input.
-          const decision = await reviewForApproval({
-            reviewer,
-            request: {
-              source: "permission-request",
-              sessionID: event.sessionID,
-              action: event.action,
-              resource: { resources: event.resources, metadata: event.metadata },
-              ...(await grant.intent.context()),
-              model: await sessionModel(event.sessionID),
-            },
-          });
-          if (grant.intent.changed()) {
-            nativeGrants.delete(key);
-            return;
-          }
-          if (decision === undefined) {
-            // Fail closed on deny, escalate or reviewer failures, without
-            // surprising the user with an interactive native prompt.
-            event.effect = "deny";
-            event.message = "Additional native permission was not approved by auto-review.";
-            return;
-          }
-          event.effect = "allow";
-          event.message = decision.reason;
+      /** The denial for an ask whose every target is missing, if any. */
+      const pathDenial = async (ask: AskRequest): Promise<AskSettlement | undefined> => {
+        const missing = await missingTarget({
+          directory: context.location.directory,
+          candidates: targetedPaths(ask),
         });
+        return missing === undefined
+          ? undefined
+          : {
+              effect: "deny",
+              message: nonexistentPathMessage({ action: ask.action, path: missing }),
+            };
+      };
 
+      /** The same denial for a tool call the guard may see as a call, not an ask. */
+      const toolPathDenial = async (call: {
+        tool: string;
+        input: unknown;
+      }): Promise<string | undefined> => {
+        const missing = await missingTarget({
+          directory: context.location.directory,
+          candidates: toolTargets(call),
+        });
+        return missing === undefined
+          ? undefined
+          : nonexistentPathMessage({ action: call.tool, path: missing });
+      };
+
+      /**
+       * Settles one ask by review: an `allow` is returned as it is, and a
+       * non-approval settles the ask only when `unapprovedAsk` says so. The
+       * relayed reason is what the requesting session reads at the denial site.
+       */
+      const settleAsk = async (ask: AskRequest): Promise<AskSettlement | undefined> => {
+        const intent = await tracker.begin(ask.sessionID);
+        const outcome = await reviewAsk({
+          reviewer,
+          request: {
+            source: "permission-request",
+            sessionID: ask.sessionID,
+            action: ask.action,
+            resource: { resources: ask.resources, metadata: ask.metadata },
+            ...(await intent.context()),
+            model: await sessionModel(ask.sessionID),
+          },
+        });
+        // A prompt during the review replaces the intent it was reviewed
+        // against; the human prompt decides instead.
+        if (intent.changed()) return undefined;
+        if (outcome.kind === "allow") return { effect: "allow", message: outcome.verdict.reason };
+        // By default a non-approval leaves the ask with the human. A run where
+        // nobody can answer settles it instead: with `unapprovedAsk: "reject"`
+        // the ask is rejected and relays why.
+        if (configuration.unapprovedAsk !== "reject") return undefined;
+        return {
+          effect: "deny",
+          message:
+            outcome.kind === "failed"
+              ? failedReviewMessage({ action: ask.action, error: outcome.error })
+              : rejectedAskMessage({
+                  action: ask.action,
+                  verdict: outcome.verdict.verdict,
+                  reason: outcome.verdict.reason,
+                }),
+        };
+      };
+
+      /**
+       * Answers the native ask that a reviewed call raised, from the approval
+       * that call already received. An ask whose grant is gone, expired, or made
+       * for a call that changed stays with the human.
+       */
+      const answerNativeAsk = async (ask: NativeAskRequest): Promise<AskSettlement | undefined> => {
+        if (ask.source?.type !== "tool") return undefined;
+        const key = grantKey({
+          sessionID: ask.sessionID,
+          messageID: ask.source.messageID,
+          id: ask.source.id,
+        });
+        const grant = nativeGrants.get(key);
+        if (!grant || grant.agent !== ask.agent) return undefined;
+        // A later execute.before hook (another plugin, or core's input repair)
+        // may have rewritten the call after it was reviewed; the native ask then
+        // stays with a human before the tool runs.
+        if (Date.now() >= grant.expiresAt || grant.intent.changed() || !unchanged(grant)) {
+          nativeGrants.delete(key);
+          return undefined;
+        }
+
+        if (ask.action === grant.tool) {
+          // The reviewer examined this tool's input. An unrelated permission
+          // action cannot inherit this grant, even with the same call ID. The
+          // ask's resources are not compared with that input: a tool that
+          // resolves its own resources at run time is trusted to derive them
+          // from the reviewed input (see README).
+          return { effect: "allow", message: "Approved by auto-review for this tool invocation." };
+        }
+
+        // Resolve extra native asks separately using their ACTUAL resources.
+        // Especially important for external_directory, where symlinks may
+        // resolve outside the path visible in the reviewed tool input.
+        const decision = await reviewForApproval({
+          reviewer,
+          request: {
+            source: "permission-request",
+            sessionID: ask.sessionID,
+            action: ask.action,
+            resource: { resources: ask.resources, metadata: ask.metadata },
+            ...(await grant.intent.context()),
+            model: await sessionModel(ask.sessionID),
+          },
+        });
+        if (grant.intent.changed()) {
+          nativeGrants.delete(key);
+          return undefined;
+        }
+        if (decision === undefined) {
+          // Fail closed on deny, escalate or reviewer failures, without
+          // surprising the user with an interactive native prompt.
+          return {
+            effect: "deny",
+            message: "Additional native permission was not approved by auto-review.",
+          };
+        }
+        return { effect: "allow", message: decision.reason };
+      };
+
+      // One hook owns every ask-side decision, in that order: the path guard
+      // first, then the review the mode asks for. The guard is an early answer,
+      // not a review outcome, so it is independent of `mode` and of
+      // `unapprovedAsk`, and the native-ask checkpoint stays intact.
+      if (guardsMissingPath || reviewsAsks || reviewsNativeAsks) {
+        await context.permission.hook("evaluate", async (event) => {
+          if (event.effect !== "ask" || isReviewer(event)) return;
+
+          // A read, external-directory, grep or glob ask whose every target is
+          // missing can only end in a tool error (the read misses, the external
+          // target is gone, the search anchor is gone), so it is denied before
+          // any reviewer runs and the requester reads which path is gone.
+          const denial = guardsMissingPath ? await pathDenial(event) : undefined;
+          if (denial !== undefined) {
+            event.effect = denial.effect;
+            event.message = denial.message;
+            return;
+          }
+
+          const settlement = reviewsAsks
+            ? await settleAsk(event)
+            : reviewsNativeAsks
+              ? await answerNativeAsk(event)
+              : undefined;
+          if (settlement === undefined) return;
+          event.effect = settlement.effect;
+          event.message = settlement.message;
+        });
+      }
+
+      // A grant is only recorded for a reviewed call, so without the native-ask
+      // bridge there is nothing to revoke.
+      if (reviewsNativeAsks) {
         await context.tool.hook("execute.after", (event) => {
           const key = grantKey(event);
           const grant = nativeGrants.get(key);
@@ -320,48 +462,59 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         });
       }
 
-      await context.tool.hook("execute.before", async (event) => {
-        // A skipped call runs without a review, so the agent name is not enough: a
-        // session the host started under that agent (a task, say) is reviewed
-        // like any other. Each late read of a winding-down reviewer session
-        // costs one review.
-        if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
+      // Only all-tools reviews every call. In on-ask the evaluate hook above owns
+      // every decision, so registering this one would review allowed calls too.
+      if (configuration.mode === "all-tools") {
+        await context.tool.hook("execute.before", async (event) => {
+          // A skipped call runs without a review, so the agent name is not enough: a
+          // session the host started under that agent (a task, say) is reviewed
+          // like any other. Each late read of a winding-down reviewer session
+          // costs one review.
+          if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
 
-        const key = grantKey(event);
-        nativeGrants.delete(key);
-        for (const [pending, grant] of nativeGrants) {
-          if (Date.now() >= grant.expiresAt) nativeGrants.delete(pending);
-        }
-        // Taken before the review so a change made while it runs is caught.
-        const reviewed = { tool: event.tool, inputDigest: inputDigest(event.input) };
-        const intent = await tracker.begin(event.sessionID);
-        await reviewToolCallOrThrow({
-          reviewer,
-          request: {
-            source: "tool-call",
-            sessionID: event.sessionID,
-            action: event.tool,
-            resource: event.input,
-            ...(await intent.context()),
-            model: await sessionModel(event.sessionID),
-          },
-        });
-        if (intent.changed()) {
-          throw new Error("User intent changed during review; human review is required.");
-        }
-        if (!unchanged({ ...reviewed, call: event })) {
-          throw new Error("Tool call changed during review; human review is required.");
-        }
-        if (configuration.allToolsNativeAsks === "review") {
-          nativeGrants.set(key, {
-            agent: event.agent,
-            ...reviewed,
-            call: event,
-            intent,
-            expiresAt: Date.now() + grantLifetimeMs,
+          // The same guard for a tool call: in all-tools every call is reviewed,
+          // and reading or searching a missing path reaches the same tool error.
+          if (guardsMissingPath) {
+            const denial = await toolPathDenial({ tool: event.tool, input: event.input });
+            if (denial !== undefined) throw new Error(denial);
+          }
+
+          const key = grantKey(event);
+          nativeGrants.delete(key);
+          for (const [pending, grant] of nativeGrants) {
+            if (Date.now() >= grant.expiresAt) nativeGrants.delete(pending);
+          }
+          // Taken before the review so a change made while it runs is caught.
+          const reviewed = { tool: event.tool, inputDigest: inputDigest(event.input) };
+          const intent = await tracker.begin(event.sessionID);
+          await reviewToolCallOrThrow({
+            reviewer,
+            request: {
+              source: "tool-call",
+              sessionID: event.sessionID,
+              action: event.tool,
+              resource: event.input,
+              ...(await intent.context()),
+              model: await sessionModel(event.sessionID),
+            },
           });
-        }
-      });
+          if (intent.changed()) {
+            throw new Error("User intent changed during review; human review is required.");
+          }
+          if (!unchanged({ ...reviewed, call: event })) {
+            throw new Error("Tool call changed during review; human review is required.");
+          }
+          if (configuration.allToolsNativeAsks === "review") {
+            nativeGrants.set(key, {
+              agent: event.agent,
+              ...reviewed,
+              call: event,
+              intent,
+              expiresAt: Date.now() + grantLifetimeMs,
+            });
+          }
+        });
+      }
     },
   };
 }

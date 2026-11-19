@@ -124,6 +124,18 @@ export type PluginConfiguration = {
   mode: ReviewerMode;
   /** V2 all-tools: preserve native asks unless explicitly opted into AI review. */
   allToolsNativeAsks: "preserve" | "review";
+  /**
+   * V2 on-ask: what a denied, escalated or failed review does to the ask.
+   * `prompt` leaves the human permission prompt in place; `reject` settles the
+   * ask as a rejection and relays the reviewer's reason to the requester.
+   */
+  unapprovedAsk: "prompt" | "reject";
+  /**
+   * V2: `deny` refuses an ask or a tool call whose every targeted path is
+   * missing without starting a reviewer session; `review` leaves it to the
+   * reviewer. Independent of `mode`.
+   */
+  nonexistentPath: "review" | "deny";
   auditLog: { enabled: boolean; includeCommand: boolean; path?: string };
   /** Operations escalated to a human before any reviewer sees them. */
   escalate: EscalationRule[];
@@ -144,6 +156,8 @@ export type PluginConfiguration = {
     recordUsage: boolean;
     /** Reviews running at once; more wait for a slot, then escalate. */
     maxConcurrentReviews: number;
+    /** Attempts per review before its failure settles the ask; 1 disables retries. */
+    maxReviewAttempts: number;
     /** Credentials replaced before anything reaches a reviewer. */
     redact: { enabled: boolean; patterns: string[] };
     decision?: DecisionConfiguration;
@@ -315,6 +329,8 @@ const pluginConfigurationSchema = z.object({
       .check(z.maxLength(200)),
   ),
   allToolsNativeAsks: z.optional(z.enum(["preserve", "review"] as const)),
+  unapprovedAsk: z.optional(z.enum(["prompt", "reject"] as const)),
+  nonexistentPath: z.optional(z.enum(["review", "deny"] as const)),
   reviewer: z.optional(
     z.object({
       backend: z.optional(z.enum(reviewerBackends)),
@@ -329,6 +345,7 @@ const pluginConfigurationSchema = z.object({
       replaceDefaultPolicy: z.optional(z.boolean()),
       recordUsage: z.optional(z.boolean()),
       maxConcurrentReviews: z.optional(z.int().check(z.gte(1), z.lte(32))),
+      maxReviewAttempts: z.optional(z.int().check(z.gte(1), z.lte(5))),
       redact: z.optional(
         z.object({
           enabled: z.optional(z.boolean()),
@@ -374,6 +391,7 @@ export function parsePluginConfiguration(input: {
   const decision = backend === "decision" ? decisionConfiguration({ reviewer, env }) : undefined;
   const configuration: PluginConfiguration = {
     ...modeConfiguration(result.data),
+    ...askHandling(result.data),
     auditLog: auditConfiguration(result.data.auditLog),
     escalate: (result.data.escalate ?? []).map(({ action, resource }) => ({
       action,
@@ -398,12 +416,13 @@ export function parsePluginConfiguration(input: {
   return configuration;
 }
 
-/** How many reviews run at once and what is redacted before one starts. */
+/** How many reviews run at once, how often one is retried, and what is redacted first. */
 function reviewBounds(
   reviewer: ReviewerOptions | undefined,
-): Pick<PluginConfiguration["reviewer"], "maxConcurrentReviews" | "redact"> {
+): Pick<PluginConfiguration["reviewer"], "maxConcurrentReviews" | "maxReviewAttempts" | "redact"> {
   return {
     maxConcurrentReviews: reviewer?.maxConcurrentReviews ?? 4,
+    maxReviewAttempts: reviewer?.maxReviewAttempts ?? 1,
     redact: {
       enabled: reviewer?.redact?.enabled ?? true,
       patterns: reviewer?.redact?.patterns ?? [],
@@ -422,6 +441,16 @@ function modeConfiguration(input: {
   return {
     mode,
     allToolsNativeAsks: input.allToolsNativeAsks ?? "preserve",
+  };
+}
+
+function askHandling(input: {
+  unapprovedAsk?: PluginConfiguration["unapprovedAsk"];
+  nonexistentPath?: PluginConfiguration["nonexistentPath"];
+}): Pick<PluginConfiguration, "unapprovedAsk" | "nonexistentPath"> {
+  return {
+    unapprovedAsk: input.unapprovedAsk ?? "prompt",
+    nonexistentPath: input.nonexistentPath ?? "review",
   };
 }
 

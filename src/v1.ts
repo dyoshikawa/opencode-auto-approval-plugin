@@ -132,6 +132,13 @@ function rejectV2OnlyOptions(configuration: PluginConfiguration): void {
   if (configuration.allToolsNativeAsks === "review") {
     throw invalidOptions('allToolsNativeAsks "review" needs OpenCode 2.x.');
   }
+  // Settling and guarding an ask both need the same hook: V1 can only approve.
+  if (configuration.unapprovedAsk === "reject") {
+    throw invalidOptions('unapprovedAsk "reject" needs OpenCode 2.x.');
+  }
+  if (configuration.nonexistentPath === "deny") {
+    throw invalidOptions('nonexistentPath "deny" needs OpenCode 2.x.');
+  }
   // V1 reviewer sessions are never removed.
   if (
     configuration.reviewer.agent.runtime === "opencode" &&
