@@ -139,6 +139,13 @@ function rejectV2OnlyOptions(configuration: PluginConfiguration): void {
   ) {
     throw invalidOptions("reviewer.agent.cleanupSessions needs OpenCode 2.x.");
   }
+  // V1's reviewer agent policy has no per-path external grants.
+  if (
+    configuration.reviewer.agent.runtime === "opencode" &&
+    configuration.reviewer.agent.externalDirectories.length > 0
+  ) {
+    throw invalidOptions("reviewer.agent.externalDirectories needs OpenCode 2.x.");
+  }
 }
 
 export function createV1Plugin(dependencies: PluginDependencies): Plugin {

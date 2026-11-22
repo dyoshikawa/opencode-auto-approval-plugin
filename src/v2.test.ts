@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { createV2Plugin, createV2SessionClient } from "./v2.js";
+import { parsePluginConfiguration } from "./config.js";
+import { createV2Plugin, createV2SessionClient, reviewerPermissionRules } from "./v2.js";
 
 type ReviewerVerdict = "allow" | "deny" | "escalate";
 
@@ -911,6 +912,24 @@ describe("V2 session client", () => {
         { action: "read", resource: "*.env.example", effect: "allow" },
       ],
     });
+  });
+
+  it("grants configured external directories after the blanket deny", async () => {
+    const { context, session } = createContext();
+    const configuration = parsePluginConfiguration({
+      options: { reviewer: { agent: { externalDirectories: ["/tmp/opencode"] } } },
+    });
+    const client = createV2SessionClient(context as never, reviewerPermissionRules(configuration));
+
+    await client.create({});
+
+    const call = (session.create as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(
+      -1,
+    )?.[0] as { permissions: Array<Record<string, string>> };
+    expect(call.permissions.slice(-2)).toEqual([
+      { action: "external_directory", resource: "/tmp/opencode", effect: "allow" },
+      { action: "external_directory", resource: "/tmp/opencode/*", effect: "allow" },
+    ]);
   });
 
   it("returns only the final assistant reply", async () => {
