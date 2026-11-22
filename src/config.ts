@@ -1,4 +1,5 @@
-import { isAbsolute } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 
 import * as z from "zod/mini";
 
@@ -107,6 +108,11 @@ type AgentConfiguration = {
       model?: ModelReference;
       /** Remove completed reviewer sessions only when explicitly enabled. */
       cleanupSessions: boolean;
+      /**
+       * Absolute directories the reviewer may read outside the workspace.
+       * Each one also grants everything beneath it.
+       */
+      externalDirectories: string[];
     }
   | {
       runtime: SdkRuntime;
@@ -228,6 +234,7 @@ const agentOptionsSchema = z.object({
   model: z.optional(z.union([modelReferenceSchema, z.string().check(z.minLength(1))])),
   maxInputBytes: z.optional(z.int().check(z.gte(1_000), z.lte(4_000_000))),
   cleanupSessions: z.optional(z.boolean()),
+  externalDirectories: z.optional(z.array(z.string())),
   claudeAgentSdk: z.optional(sdkOptionsSchema),
   codexSdk: z.optional(sdkOptionsSchema),
 });
@@ -610,6 +617,11 @@ function agentConfiguration(reviewer: ReviewerOptions | undefined): AgentConfigu
         'reviewer.agent.cleanupSessions needs reviewer.agent.runtime "opencode".',
       );
     }
+    if (agent.externalDirectories !== undefined) {
+      throw invalidOptions(
+        'reviewer.agent.externalDirectories needs reviewer.agent.runtime "opencode".',
+      );
+    }
     return sdkAgentConfiguration({
       runtime,
       model,
@@ -626,8 +638,37 @@ function agentConfiguration(reviewer: ReviewerOptions | undefined): AgentConfigu
     runtime: "opencode",
     maxInputBytes,
     cleanupSessions: agent.cleanupSessions ?? false,
+    externalDirectories: externalDirectories(agent.externalDirectories ?? []),
     ...(model === undefined ? {} : { model }),
   };
+}
+
+/**
+ * Absolute directories the reviewer may read outside the workspace. `~` is
+ * expanded here because these rules are generated, not configuration, so the
+ * host never expands them.
+ */
+function externalDirectories(input: string[]): string[] {
+  if (input.length > 32) {
+    throw invalidOptions("reviewer.agent.externalDirectories accepts at most 32 paths.");
+  }
+  const directories = new Set<string>();
+  for (const entry of input) {
+    const value = entry.trim();
+    if (value.length === 0) {
+      throw invalidOptions("reviewer.agent.externalDirectories cannot contain an empty path.");
+    }
+    if (value.includes("\0")) {
+      throw invalidOptions("reviewer.agent.externalDirectories cannot contain a NUL byte.");
+    }
+    const expanded =
+      value === "~" ? homedir() : value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
+    if (!isAbsolute(expanded)) {
+      throw invalidOptions(`reviewer.agent.externalDirectories needs absolute paths: "${entry}".`);
+    }
+    directories.add(expanded.replace(/\/+$/, "") || "/");
+  }
+  return [...directories];
 }
 
 function sdkAgentConfiguration(input: {

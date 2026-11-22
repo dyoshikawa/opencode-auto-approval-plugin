@@ -9,7 +9,7 @@ import {
   reviewerAllowedTools,
   reviewerEnvReadRules,
 } from "./agent-reviewer.js";
-import type { ModelReference } from "./config.js";
+import type { ModelReference, PluginConfiguration } from "./config.js";
 import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
 import { conversationFromMessages, readConversation } from "./conversation.js";
 import type { ReviewSessionClient } from "./reviewer.js";
@@ -86,7 +86,7 @@ function fromModelRef(
  * These rules replace the host's defaults, so its `.env` read ask is kept as
  * a deny: the reviewer has no reason to read a credential file.
  */
-const reviewerPermissions = [
+const defaultReviewerPermissions = [
   { action: "*", resource: "*", effect: "deny" as const },
   ...reviewerAllowedTools.map((tool) => ({
     action: tool,
@@ -96,7 +96,36 @@ const reviewerPermissions = [
   ...reviewerEnvReadRules.map(([resource, effect]) => ({ action: "read", resource, effect })),
 ];
 
-export function createV2SessionClient(context: Context): ReviewSessionClient {
+/** Read access to directories outside the workspace that the reviewed command may reference. */
+function externalDirectoryRules(directories: string[]) {
+  return directories.flatMap((directory) => {
+    if (directory.includes("*") || directory.includes("?")) {
+      return [{ action: "external_directory", resource: directory, effect: "allow" as const }];
+    }
+    return [
+      { action: "external_directory", resource: directory, effect: "allow" as const },
+      { action: "external_directory", resource: `${directory}/*`, effect: "allow" as const },
+    ];
+  });
+}
+
+/**
+ * The reviewer's read-only policy. Later rules win, so the configured external
+ * grants follow the blanket deny; without them the reviewer cannot read a
+ * script or asset the reviewed command points at.
+ */
+export function reviewerPermissionRules(configuration: PluginConfiguration) {
+  const agent = configuration.reviewer.agent;
+  return [
+    ...defaultReviewerPermissions,
+    ...(agent.runtime === "opencode" ? externalDirectoryRules(agent.externalDirectories) : []),
+  ];
+}
+
+export function createV2SessionClient(
+  context: Context,
+  permissions: ReturnType<typeof reviewerPermissionRules> = defaultReviewerPermissions,
+): ReviewSessionClient {
   return {
     create: async ({ model, parentID }) => {
       const session = await context.session.create({
@@ -105,7 +134,7 @@ export function createV2SessionClient(context: Context): ReviewSessionClient {
         ...(parentID ? { parentID } : {}),
         // Repeated on the session so the agent staying read-only does not
         // depend on nothing else redefining it.
-        permissions: [...reviewerPermissions],
+        permissions: [...permissions],
         ...(model ? { model: toModelRef(model) } : {}),
       });
       return { sessionID: session.id };
@@ -134,8 +163,9 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
     id: pluginID,
     setup: async (context) => {
       const configuration = parsePluginConfiguration({ options: context.options });
+      const permissions = reviewerPermissionRules(configuration);
       const reviewer = dependencies.createReviewer({
-        client: createV2SessionClient(context),
+        client: createV2SessionClient(context, permissions),
         configuration,
         directory: context.location.directory,
       });
@@ -173,7 +203,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
             agent.system = reviewerAgentPrompt;
             agent.mode = "subagent";
             agent.hidden = true;
-            agent.permissions = [...reviewerPermissions];
+            agent.permissions = [...permissions];
           });
         });
       }

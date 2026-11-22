@@ -148,6 +148,33 @@ is rejected at startup, since it would have no effect there.
 }
 ```
 
+### Reading files outside the workspace
+
+The reviewer can inspect the workspace with `read`, `glob` and `grep`, but it cannot read paths
+outside the session's directory. When a reviewed command points at a script or asset elsewhere — a
+scratch build under `/tmp`, a sibling checkout — the reviewer cannot verify it, and a policy that
+escalates opaque execution sends that operation to you instead.
+
+`reviewer.agent.externalDirectories` grants read access to specific directories. Each entry also
+grants everything beneath it, and `~/` is expanded.
+
+```json
+{
+  "reviewer": {
+    "agent": {
+      "externalDirectories": ["/tmp/opencode", "~/scratch"]
+    }
+  }
+}
+```
+
+- The `opencode` runtime on OpenCode 2.x only; rejected at startup for the SDK runtimes and on
+  OpenCode 1.x, where the reviewer policy has no per-path external grants.
+- The grant is read-only and follows the reviewer's blanket deny, so the rest of the filesystem
+  stays closed.
+- It widens what the reviewer can read and send to the reviewer provider, so list only directories
+  a review may need. An entry with a wildcard is used as written instead of covering its subtree.
+
 ### Agent runtimes
 
 `reviewer.agent.runtime` chooses where the `agent` reviewer runs. It applies wherever the agent
@@ -254,23 +281,24 @@ same System One API:
 }
 ```
 
-| Option                                  | Default                   | Description                                                                                                                                             |
-| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `reviewer.backend`                      | `"agent"`                 | `"agent"`, `"chat"` or `"decision"`                                                                                                                     |
-| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                                                                                                          |
-| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access                                                                                   |
-| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback)                                                                               |
-| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                                                                                                          |
-| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.14.0` for stable behavior                                                                                  |
-| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                                                                                         |
-| `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)                                                                             |
-| `reviewer.decision.longContext`         | off                       | `typesafe` only: `true` or `{ maxStateTokens, minAllowProbability }` to send larger operations with [long context](#long-context-typesafe)              |
-| `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer                                                                    |
-| `reviewer.agent.maxInputBytes`          | `200000`                  | The agent reviewer escalates a prompt longer than this (UTF-8 bytes) unsent rather than let the session compact it                                      |
-| `reviewer.agent.runtime`                | `"opencode"`              | Where the agent reviewer runs: `"opencode"`, `"claude-agent-sdk"` or `"codex-sdk"` ([agent runtimes](#agent-runtimes))                                  |
-| `reviewer.agent.cleanupSessions`        | `false`                   | `opencode` runtime on OpenCode 2.x only: delete each reviewer session after its decision ([session lifecycle](#reviewer-session-lifecycle-opencode-v2)) |
-| `reviewer.agent.claudeAgentSdk.path`    | —                         | `claude-agent-sdk` only: absolute path of the installed `@anthropic-ai/claude-agent-sdk` package directory                                              |
-| `reviewer.agent.codexSdk.path`          | —                         | `codex-sdk` only: absolute path of the installed `@openai/codex-sdk` package directory                                                                  |
+| Option                                  | Default                   | Description                                                                                                                                                 |
+| --------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reviewer.backend`                      | `"agent"`                 | `"agent"`, `"chat"` or `"decision"`                                                                                                                         |
+| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                                                                                                              |
+| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access                                                                                       |
+| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback)                                                                                   |
+| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                                                                                                              |
+| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.14.0` for stable behavior                                                                                      |
+| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                                                                                             |
+| `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)                                                                                 |
+| `reviewer.decision.longContext`         | off                       | `typesafe` only: `true` or `{ maxStateTokens, minAllowProbability }` to send larger operations with [long context](#long-context-typesafe)                  |
+| `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer                                                                        |
+| `reviewer.agent.maxInputBytes`          | `200000`                  | The agent reviewer escalates a prompt longer than this (UTF-8 bytes) unsent rather than let the session compact it                                          |
+| `reviewer.agent.runtime`                | `"opencode"`              | Where the agent reviewer runs: `"opencode"`, `"claude-agent-sdk"` or `"codex-sdk"` ([agent runtimes](#agent-runtimes))                                      |
+| `reviewer.agent.cleanupSessions`        | `false`                   | `opencode` runtime on OpenCode 2.x only: delete each reviewer session after its decision ([session lifecycle](#reviewer-session-lifecycle-opencode-v2))     |
+| `reviewer.agent.externalDirectories`    | `[]`                      | `opencode` runtime on OpenCode 2.x only: absolute directories the reviewer may read outside the workspace ([details](#reading-files-outside-the-workspace)) |
+| `reviewer.agent.claudeAgentSdk.path`    | —                         | `claude-agent-sdk` only: absolute path of the installed `@anthropic-ai/claude-agent-sdk` package directory                                                  |
+| `reviewer.agent.codexSdk.path`          | —                         | `codex-sdk` only: absolute path of the installed `@openai/codex-sdk` package directory                                                                      |
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the

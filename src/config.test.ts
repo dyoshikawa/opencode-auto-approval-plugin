@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
@@ -93,7 +94,12 @@ describe("parsePluginConfiguration", () => {
       escalate: [],
       reviewer: {
         backend: "agent",
-        agent: { runtime: "opencode", maxInputBytes: 200_000, cleanupSessions: false },
+        agent: {
+          runtime: "opencode",
+          maxInputBytes: 200_000,
+          cleanupSessions: false,
+          externalDirectories: [],
+        },
         timeoutMs: 30_000,
         recordUsage: true,
         maxConcurrentReviews: 4,
@@ -126,6 +132,7 @@ describe("parsePluginConfiguration", () => {
           model: { providerID: "openrouter", modelID: "openai/gpt-5.6-luna" },
           maxInputBytes: 200_000,
           cleanupSessions: false,
+          externalDirectories: [],
         },
         timeoutMs: 12_000,
         recordUsage: true,
@@ -189,6 +196,39 @@ describe("parsePluginConfiguration", () => {
       parsePluginConfiguration({ options: { reviewer: { agent: { cleanupSessions: false } } } })
         .reviewer.agent,
     ).toMatchObject({ runtime: "opencode", cleanupSessions: false });
+  });
+
+  it("grants the reviewer only the external directories it is given", () => {
+    const agent = parsePluginConfiguration({
+      options: {
+        reviewer: {
+          agent: { externalDirectories: ["/tmp/opencode/", "/tmp/opencode", "~/scratch"] },
+        },
+      },
+    }).reviewer.agent;
+    expect(agent).toMatchObject({
+      runtime: "opencode",
+      externalDirectories: ["/tmp/opencode", join(homedir(), "scratch")],
+    });
+    expect(() =>
+      parsePluginConfiguration({
+        options: { reviewer: { agent: { externalDirectories: ["relative/path"] } } },
+      }),
+    ).toThrow("reviewer.agent.externalDirectories needs absolute paths");
+    expect(() =>
+      parsePluginConfiguration({
+        options: { reviewer: { agent: { externalDirectories: ["  "] } } },
+      }),
+    ).toThrow("reviewer.agent.externalDirectories cannot contain an empty path");
+    expect(() =>
+      parsePluginConfiguration({
+        options: {
+          reviewer: { agent: { runtime: "codex-sdk", externalDirectories: ["/tmp"] } },
+        },
+      }),
+    ).toThrow(
+      'Invalid auto-approval plugin options: reviewer.agent.externalDirectories needs reviewer.agent.runtime "opencode".',
+    );
   });
 
   describe("agent runtime", () => {
@@ -1302,6 +1342,7 @@ describe("parsePluginConfiguration", () => {
         model: { providerID: "c", modelID: "d" },
         maxInputBytes: 200_000,
         cleanupSessions: false,
+        externalDirectories: [],
       });
     });
 
@@ -1358,7 +1399,12 @@ describe("parsePluginConfiguration", () => {
         }).reviewer,
       ).toEqual({
         backend: "decision",
-        agent: { runtime: "opencode", maxInputBytes: 200_000, cleanupSessions: false },
+        agent: {
+          runtime: "opencode",
+          maxInputBytes: 200_000,
+          cleanupSessions: false,
+          externalDirectories: [],
+        },
         timeoutMs: 30_000,
         recordUsage: true,
         maxConcurrentReviews: 4,
