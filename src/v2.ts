@@ -17,6 +17,7 @@ import {
   createIntentTracker,
   createRootSessionResolver,
   parentIdentifier,
+  type ConversationContextRequest,
 } from "./session-root.js";
 import type { PluginDependencies } from "./shared.js";
 import { reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
@@ -140,10 +141,13 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         directory: context.location.directory,
       });
       const intents = new Map<string, string>();
-      const conversation = (sessionID: string) =>
+      const parentOf = async (sessionID: string) =>
+        parentIdentifier(await context.session.get({ sessionID }));
+      const conversation = (sessionID: string, request: ConversationContextRequest = {}) =>
         readConversation({
           configuration: configuration.conversation,
-          latest: () => intents.get(sessionID),
+          latest: () => request.latest ?? intents.get(sessionID),
+          truncateAtLatest: request.truncateAtLatest,
           load: async () =>
             conversationFromMessages({
               messages: await context.session.context({ sessionID }),
@@ -155,9 +159,8 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       // Subagent (child) sessions are prompted by the parent agent, not by the
       // person, so the person's intent is read from the root session.
       const tracker = createIntentTracker({
-        rootSession: createRootSessionResolver(async (sessionID) =>
-          parentIdentifier(await context.session.get({ sessionID })),
-        ),
+        rootSession: createRootSessionResolver(parentOf),
+        parentSession: parentOf,
         conversation,
         conversationEnabled: configuration.conversation.enabled,
       });
@@ -193,7 +196,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
         if (event.metadata?.synthetic || event.metadata?.ignored) return;
         intents.set(event.sessionID, event.prompt.text);
-        tracker.prompted(event.sessionID);
+        tracker.prompted(event.sessionID, event.prompt.text);
       });
 
       const sessionModel = async (sessionID: string): Promise<ModelReference | undefined> => {

@@ -19,6 +19,7 @@ import {
   createIntentTracker,
   createRootSessionResolver,
   parentIdentifier,
+  type ConversationContextRequest,
 } from "./session-root.js";
 import type { PluginDependencies } from "./shared.js";
 import { isRecord, reviewForApproval, reviewToolCallOrThrow, textFromParts } from "./shared.js";
@@ -155,10 +156,11 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
     });
     const models = new Map<string, ModelReference>();
     const intents = new Map<string, string>();
-    const conversation = (sessionID: string) =>
+    const conversation = (sessionID: string, request: ConversationContextRequest = {}) =>
       readConversation({
         configuration: configuration.conversation,
-        latest: () => intents.get(sessionID),
+        latest: () => request.latest ?? intents.get(sessionID),
+        truncateAtLatest: request.truncateAtLatest,
         load: async () => {
           const client = context.client as unknown as SdkClient;
           if (!client.session?.messages) throw new Error("Session history is unavailable.");
@@ -173,19 +175,21 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
           });
         },
       });
+    const parentOf = async (sessionID: string) => {
+      const client = context.client as unknown as SdkClient;
+      if (!client.session?.get) throw new Error("Session lookup is unavailable.");
+      return parentIdentifier(
+        await client.session.get({
+          path: { id: sessionID },
+          query: { directory: context.directory },
+        }),
+      );
+    };
     // Subagent (child) sessions are prompted by the parent agent, not by the
     // person, so the person's intent is read from the root session.
     const tracker = createIntentTracker({
-      rootSession: createRootSessionResolver(async (sessionID) => {
-        const client = context.client as unknown as SdkClient;
-        if (!client.session?.get) throw new Error("Session lookup is unavailable.");
-        return parentIdentifier(
-          await client.session.get({
-            path: { id: sessionID },
-            query: { directory: context.directory },
-          }),
-        );
-      }),
+      rootSession: createRootSessionResolver(parentOf),
+      parentSession: parentOf,
       conversation,
       conversationEnabled: configuration.conversation.enabled,
     });
@@ -202,11 +206,9 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         // The reviewer's own prompts carry no user intent worth keeping.
         if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return Promise.resolve();
         if (event.model) models.set(event.sessionID, event.model);
-        intents.set(
-          event.sessionID,
-          textFromParts({ parts: output.parts, skipSyntheticOrIgnored: true }),
-        );
-        tracker.prompted(event.sessionID);
+        const text = textFromParts({ parts: output.parts, skipSyntheticOrIgnored: true });
+        intents.set(event.sessionID, text);
+        tracker.prompted(event.sessionID, text);
         return Promise.resolve();
       },
       "chat.params": (event) => {

@@ -85,49 +85,161 @@ export function parentIdentifier(input: unknown): string | undefined {
 type ReviewIntent<Context> = {
   /** True once the person prompted the intent's session after the review began. */
   changed(): boolean;
-  /** The root session's intent and conversation, or none when the root is unknown. */
+  /** The intent's session and conversation, or none when the intent is unknown. */
   context(): Promise<Context | UnknownRootContext>;
 };
 
 type UnknownRootContext = { conversation?: { turns: never[]; incomplete: true } };
 
+/** What one review reads from a session's conversation. */
+export type ConversationContextRequest = {
+  /** The prompt this review answers; overrides the session's latest prompt. */
+  latest?: string;
+  /** Drop turns after `latest`, so a later prompt cannot read as its context. */
+  truncateAtLatest?: boolean;
+};
+
 /**
- * Track prompts and hand each review the intent of its root session.
+ * The prompt that authorized a delegation. A `task`-tool subagent acts under
+ * the prompt that spawned it, so every review in its branch uses that prompt
+ * even after the person has moved on in the root session.
+ */
+type DelegationIntent = { text: string };
+
+/** How many prompts per session are kept for binding a branch's delegation. */
+const PROMPT_HISTORY_LIMIT = 32;
+
+/**
+ * Track prompts and hand each review the intent that authorizes it.
+ *
+ * A root session's review uses its latest prompt. A subagent's review uses the
+ * root prompt that was current when its branch started: every descendant of
+ * that branch reuses the same binding, so a later unrelated prompt in the root
+ * neither authorizes nor invalidates the delegated work.
  *
  * Every prompt gets a sequence number. A review records the current number
- * synchronously when it begins, so a prompt in the root session at any point
- * afterwards — even while the root is still being looked up — marks the review
- * as stale.
+ * synchronously when it begins, so a prompt in the intent's root session or in
+ * the reviewed session itself at any point afterwards — even while the root is
+ * still being looked up — marks the review as stale.
  */
 export function createIntentTracker<Context>(input: {
   rootSession(sessionID: string): Promise<string | undefined>;
-  conversation(rootSessionID: string): Promise<Context>;
+  parentSession(sessionID: string): Promise<string | undefined>;
+  conversation(sessionID: string, request?: ConversationContextRequest): Promise<Context>;
   conversationEnabled: boolean;
 }): {
-  prompted(sessionID: string): void;
+  prompted(sessionID: string, text: string): void;
   begin(sessionID: string): Promise<ReviewIntent<Context>>;
 } {
   let sequence = 0;
   const latestPrompt = new Map<string, number>();
+  const prompts = new Map<string, Array<{ sequence: number; text: string }>>();
+  const firstPrompt = new Map<string, number>();
+  const delegations = new Map<string, DelegationIntent>();
+  const pending = new Map<string, Promise<DelegationIntent | undefined>>();
+
+  const prompted = (sessionID: string, text: string) => {
+    sequence += 1;
+    latestPrompt.set(sessionID, sequence);
+    const history = prompts.get(sessionID) ?? [];
+    history.push({ sequence, text });
+    if (history.length > PROMPT_HISTORY_LIMIT) history.shift();
+    prompts.set(sessionID, history);
+    if (!firstPrompt.has(sessionID)) firstPrompt.set(sessionID, sequence);
+  };
+
+  /**
+   * The sessions between `sessionID` and the root, nearest first, as far as
+   * the chain can be read. A cycle, a failed lookup or excessive depth stops
+   * the walk; the root resolver still fails closed on its own.
+   */
+  const ancestors = async (sessionID: string): Promise<string[]> => {
+    const chain: string[] = [];
+    const seen = new Set<string>([sessionID]);
+    let current: string | undefined;
+    try {
+      current = await input.parentSession(sessionID);
+      while (
+        current !== undefined &&
+        current !== "" &&
+        chain.length < MAX_SESSION_DEPTH &&
+        !seen.has(current)
+      ) {
+        seen.add(current);
+        chain.push(current);
+        current = await input.parentSession(current);
+      }
+    } catch {
+      // Keep whatever part of the chain was read.
+    }
+    return chain;
+  };
+
+  const findDelegation = async (sessionID: string): Promise<DelegationIntent | undefined> => {
+    const chain = await ancestors(sessionID);
+    // Descendants of one delegation share its authority; the nearest binding wins.
+    for (const ancestor of chain) {
+      const inherited = delegations.get(ancestor);
+      if (inherited !== undefined) {
+        delegations.set(sessionID, inherited);
+        return inherited;
+      }
+    }
+    const root = await input.rootSession(sessionID);
+    if (root === undefined || root === sessionID) return undefined;
+    // The branch began with its highest session that is not the root itself;
+    // bind the root prompt that was current then, never one the person wrote
+    // afterwards.
+    const branch = chain.filter((session) => session !== root);
+    const branchHead = branch.at(-1) ?? sessionID;
+    const first = firstPrompt.get(branchHead) ?? firstPrompt.get(sessionID);
+    if (first === undefined) return undefined;
+    const entry = (prompts.get(root) ?? []).findLast((prompt) => prompt.sequence <= first);
+    if (entry === undefined) return undefined;
+    const delegation = { text: entry.text };
+    delegations.set(sessionID, delegation);
+    return delegation;
+  };
+
+  const delegationFor = async (sessionID: string): Promise<DelegationIntent | undefined> => {
+    const known = delegations.get(sessionID);
+    if (known !== undefined) return known;
+    let lookup = pending.get(sessionID);
+    if (lookup === undefined) {
+      lookup = findDelegation(sessionID).finally(() => pending.delete(sessionID));
+      pending.set(sessionID, lookup);
+    }
+    return lookup;
+  };
+
   return {
-    prompted: (sessionID) => {
-      sequence += 1;
-      latestPrompt.set(sessionID, sequence);
-    },
+    prompted,
     begin: async (sessionID) => {
       const start = sequence;
       const root = await input.rootSession(sessionID);
       // Unknown root: the review carries no intent, so only the session's own
       // prompts cancel it (a prompt in the unknown root cannot be matched).
       const intentSession = root ?? sessionID;
+      const delegation =
+        root === undefined || root === sessionID ? undefined : await delegationFor(sessionID);
       return {
-        changed: () => (latestPrompt.get(intentSession) ?? 0) > start,
-        context: async () =>
-          root === undefined
-            ? input.conversationEnabled
+        changed: () =>
+          (latestPrompt.get(intentSession) ?? 0) > start ||
+          (delegation !== undefined && (latestPrompt.get(sessionID) ?? 0) > start),
+        context: async () => {
+          if (root === undefined) {
+            return input.conversationEnabled
               ? { conversation: { turns: [], incomplete: true } }
-              : {}
-            : input.conversation(root),
+              : {};
+          }
+          if (delegation !== undefined) {
+            return input.conversation(root, {
+              latest: delegation.text,
+              truncateAtLatest: true,
+            });
+          }
+          return input.conversation(root);
+        },
       };
     },
   };

@@ -108,12 +108,27 @@ describe("parentIdentifier", () => {
   });
 });
 
-function tracker(roots: Record<string, string | undefined>) {
-  return createIntentTracker({
+function tracker(
+  parents: Record<string, string | undefined>,
+  roots: Record<string, string | undefined> = parents,
+) {
+  const latest = new Map<string, string>();
+  const intents = createIntentTracker<{ userIntent?: string; anchored?: boolean }>({
     rootSession: async (sessionID) => roots[sessionID],
-    conversation: async (root) => ({ userIntent: `intent of ${root}` }),
+    parentSession: async (sessionID) => parents[sessionID],
+    conversation: async (sessionID, request) => ({
+      userIntent: request?.latest ?? latest.get(sessionID) ?? `intent of ${sessionID}`,
+      ...(request?.truncateAtLatest === true ? { anchored: true } : {}),
+    }),
     conversationEnabled: true,
   });
+  return {
+    begin: intents.begin,
+    prompted: (sessionID: string, text = "") => {
+      latest.set(sessionID, text);
+      intents.prompted(sessionID, text);
+    },
+  };
 }
 
 describe("createIntentTracker", () => {
@@ -144,11 +159,12 @@ describe("createIntentTracker", () => {
     const root = Promise.withResolvers<string | undefined>();
     const intents = createIntentTracker({
       rootSession: () => root.promise,
+      parentSession: async () => undefined,
       conversation: async () => ({}),
       conversationEnabled: false,
     });
     const pending = intents.begin("child");
-    intents.prompted("root");
+    intents.prompted("root", "unrelated");
     root.resolve("root");
     expect((await pending).changed()).toBe(true);
   });
@@ -163,9 +179,78 @@ describe("createIntentTracker", () => {
     expect(intent.changed()).toBe(true);
     const disabled = createIntentTracker({
       rootSession: async () => undefined,
+      parentSession: async () => undefined,
       conversation: async () => ({}),
       conversationEnabled: false,
     });
     await expect((await disabled.begin("child")).context()).resolves.toEqual({});
+  });
+});
+
+describe("delegation intent", () => {
+  const oneLevel = { root: undefined, child: "root" };
+
+  it("binds a subagent to the root prompt that started its branch", async () => {
+    const intents = tracker(oneLevel);
+    intents.prompted("root", "build four mockups");
+    intents.prompted("child", "job brief");
+    intents.prompted("root", "add the skills from skill.sh");
+
+    const review = await intents.begin("child");
+
+    await expect(review.context()).resolves.toEqual({
+      userIntent: "build four mockups",
+      anchored: true,
+    });
+  });
+
+  it("inherits the branch's binding in a nested subagent", async () => {
+    const parents = { root: undefined, child: "root", grandchild: "child" };
+    const roots = { root: undefined, child: "root", grandchild: "root" };
+    const intents = tracker(parents, roots);
+    intents.prompted("root", "build four mockups");
+    intents.prompted("child", "job brief");
+    intents.prompted("root", "add the skills from skill.sh");
+    intents.prompted("grandchild", "nested brief");
+
+    const review = await intents.begin("grandchild");
+
+    await expect(review.context()).resolves.toEqual({
+      userIntent: "build four mockups",
+      anchored: true,
+    });
+  });
+
+  it("keeps the latest prompt for the root session itself", async () => {
+    const intents = tracker(oneLevel, { root: "root", child: "root" });
+    intents.prompted("root", "first");
+    intents.prompted("root", "second");
+
+    await expect((await intents.begin("root")).context()).resolves.toEqual({
+      userIntent: "second",
+    });
+  });
+
+  it("falls back to the root's latest prompt when the spawn prompt was not observed", async () => {
+    const intents = tracker(oneLevel);
+    intents.prompted("child", "job brief");
+    intents.prompted("root", "add the skills from skill.sh");
+
+    await expect((await intents.begin("child")).context()).resolves.toEqual({
+      userIntent: "add the skills from skill.sh",
+    });
+  });
+
+  it("still marks a bound review stale when either session is prompted during it", async () => {
+    const intents = tracker(oneLevel);
+    intents.prompted("root", "build four mockups");
+    intents.prompted("child", "job brief");
+    const review = await intents.begin("child");
+    intents.prompted("child", "follow-up brief");
+    expect(review.changed()).toBe(true);
+
+    const other = await intents.begin("child");
+    intents.prompted("root", "stop everything");
+    expect(other.changed()).toBe(true);
   });
 });

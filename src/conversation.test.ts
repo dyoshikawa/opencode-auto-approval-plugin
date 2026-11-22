@@ -139,6 +139,24 @@ describe("bounded conversation", () => {
     );
   });
 
+  it("anchors a delegation's review at the prompt that authorized it", async () => {
+    const load = vi.fn(async () => ({
+      turns: [
+        { role: "user" as const, text: "build four mockups" },
+        { role: "user" as const, text: "add the skills from skill.sh" },
+      ],
+      incomplete: false,
+    }));
+    const result = await readConversation({
+      load,
+      latest: () => "build four mockups",
+      configuration,
+      truncateAtLatest: true,
+    });
+    expect(result.userIntent).toBe("build four mockups");
+    expect(result.conversation?.turns).toEqual([{ role: "user", text: "build four mockups" }]);
+  });
+
   it("records selected model-written options without replacing userIntent", async () => {
     const messages = [
       { type: "user", text: "Audit only. No edits yet." },

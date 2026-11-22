@@ -281,6 +281,11 @@ export async function readConversation(input: {
   load(): Promise<ConversationContext>;
   latest(): string | undefined;
   configuration: PluginConfiguration["conversation"];
+  /**
+   * Anchor the review to `latest` when that prompt is in the history: turns
+   * after it belong to a later request and are not context for this operation.
+   */
+  truncateAtLatest?: boolean;
 }): Promise<{ userIntent?: string; conversation?: ConversationContext }> {
   // Disabled, the reviewer sees the captured prompt only, as before the option existed.
   if (!input.configuration.enabled) {
@@ -305,9 +310,21 @@ export async function readConversation(input: {
   );
   const latestInHistory =
     latest !== undefined && conversation.turns[lastOrdinaryIndex]?.text === latest;
+  // The anchor is the last ordinary turn carrying the reviewed prompt, taken
+  // before a missing prompt is appended at the end.
+  const anchor =
+    input.truncateAtLatest === true && latest !== undefined
+      ? conversation.turns.findLastIndex(
+          (turn) =>
+            turn.role === "user" && turn.source !== "question-answer" && turn.text === latest,
+        )
+      : -1;
   if (latest !== undefined && !latestInHistory) {
     conversation.turns.push({ role: "user", text: latest });
   }
+  // A review anchored to an earlier prompt stops there: later turns belong to
+  // a different request and are not context for this operation.
+  if (anchor >= 0) conversation.turns = conversation.turns.slice(0, anchor + 1);
   // userIntent is always the latest ordinary human prompt, never a question
   // created by the model or the model-authored labels the user selected.
   const userIntent =
